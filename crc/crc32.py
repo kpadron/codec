@@ -2,8 +2,9 @@
 import os
 import sys
 import argparse
-import itertools
 import time
+
+CRC_BLOCK_SIZE = 4096
 
 
 def main():
@@ -14,9 +15,33 @@ def main():
     """
 
     # Handle argument parsing
-    print()
+    parser = argparse.ArgumentParser()
+    parser.add_argument('file', metavar='INFILE', nargs='+', default=[], help='file to compute the CRC32 for')
+    parser.add_argument('-v', '--verbosity', action='count', default=0, help='increase output verbosity')
+    args = parser.parse_args()
+
+    # Loop through file list
+    for inpath in args.file:
+        size = os.path.getsize(inpath)
+        timediff = time.time()
+
+        crc = 0
+
+        with open(inpath, 'rb') as f:
+            while (size):
+                read_size = min(size, CRC_BLOCK_SIZE)
+                buffer = f.read(read_size)
+                crc = crc32(buffer, crc)
+                size -= read_size
+
+        timediff = time.time() - timediff
+        print('%s 0x%X' % (inpath, crc))
+
+        if args.verbosity > 0:
+            print('time: %.2f seconds (%.1f %sB/s)' % (timediff, *hr_base2(os.path.getsize(inpath) / timediff)))
 
     sys.exit()
+
 
 # CRC32 table
 crc32_table = [
@@ -66,6 +91,33 @@ def crc32(buffer, crc = 0):
         crc = (crc >> 8) ^ crc32_table[(crc & 0xFF) ^ b]
 
     return crc ^ 0xFFFFFFFF
+
+
+def hr_base2(x):
+    """
+    Convert a unit-less number to the equivalent scaled value using standard units (useful for human readable byte sizes).
+    Based on powers of 2 (ie Kilo is 2^10 not 10^3).
+
+    Params:
+        x - integer number to scale
+
+    Returns:
+        scaled - number in new base
+        symbol - unit base symbol string
+    """
+
+    symbols = ('', 'Ki', 'Mi', 'Gi', 'Ti', 'Pi', 'Ei', 'Zi', 'Yi')
+    scale = 1024
+    unit = scale
+
+    for symbol in symbols:
+        if x / unit < 1.0:
+            break
+
+        unit *= scale
+
+    return (x / (unit / scale), symbol)
+
 
 if __name__ == '__main__':
 	main()
