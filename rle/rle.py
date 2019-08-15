@@ -1,20 +1,21 @@
 #!/usr/bin/env python3
 import os
+import sys
 import argparse
-import time
 import itertools
+import time
 
 
 def main():
     """
-    Compress files with rle codec.
+    Encode and decode files using the RLE codec.
 
     use -h or --help for more info
     """
 
     # Handle argument parsing
     parser = argparse.ArgumentParser()
-    parser.add_argument('file', metavar='infile', nargs='+', default=[], help='file to compress or decompress')
+    parser.add_argument('file', metavar='INFILE', nargs='+', default=[], help='file to compress or decompress')
     parser.add_argument('-d', '--decompress', action='store_true', default=False, help='decompress files in list')
     parser.add_argument('-k', '--keep', action='store_true', default=False, help='keep original files (do not overwrite)')
     parser.add_argument('-o', '--output-file', metavar='OUTFILE', nargs='+', default=[], help='rename output file to %(metavar)s')
@@ -62,88 +63,19 @@ def main():
             print('file: %s -> %s' % (inpath, outpath))
 
         if args.verbosity > 1:
-            print('size: %u -> %u (%.0f:1)' % (old_size, new_size, max(old_size, new_size) / min(old_size, new_size)))
-            print('time: %.2f seconds (%.1f %sB/s)' % (timediff, *hr_bytes(max(old_size, new_size) / timediff)))
+            print('size: %u -> %u (%.0f:1) [%.1f%% Compressed]' % (old_size, new_size, max(old_size, new_size) / min(old_size, new_size), (1 - min(old_size, new_size) / max(old_size, new_size)) * 100))
+            print('time: %.2f seconds (%.1f %sB/s)' % (timediff, *hr_base2(max(old_size, new_size) / timediff)))
 
-
-def rle_encode_markers(inpath, outpath):
-    """
-    Perform RLE codec on file.
-
-    Params:
-        inpath  - path to file to read
-        outpath - path to file to encode and write
-    """
-
-    # Open files for processing
-    infile = open(inpath, 'rb')
-    outfile = open(outpath, 'wb')
-    size = os.path.getsize(inpath)
-
-    run_count, literal_count, start, next = 1, 1, b'', b''
-    run_flag = 0
-
-    # Start compression using RLE codec
-    if size:
-        start = infile.read(1)
-        start_offset = next_offset = 0
-        size -= 1
-
-    # Scan input for runs
-    while size:
-        if run_flag:
-            next = infile.read(1)
-            next_offset += 1
-            size -= 1
-
-            if start == next and run_count < 128:
-                run_count += 1
-            else:
-                run_count |= 0x80
-                outfile.write(bytes([run_count & 0xff]))
-                outfile.write(start)
-                start = next
-                start_offset = next_offset
-                run_count = 1
-
-                if run_count < 127:
-                    run_flag = not run_flag
-        else:
-            start = next
-
-            next = infile.read(1)
-            next_offset += 1
-            size -= 1
-
-            if start != next and literal_count < 128:
-                literal_count += 1
-            else:
-                literal_count &= ~0x80
-                outfile.write(bytes([literal_count & 0xff]))
-                infile.seek(start_offset)
-                outfile.write(infile.read(next_offset - start_offset))
-                start = next
-                start_offset = next_offset
-                literal_count = 1
-
-                if literal_count < 127:
-                    run_flag = not run_flag
-
-    # Output final run
-    outfile.write(bytes([run_count & 0xff]))
-    outfile.write(start)
-
-    infile.close()
-    outfile.close()
+        sys.exit()
 
 
 def rle_encode(inpath, outpath):
     """
-    Perform RLE codec on file.
+    Encode the input file using the RLE codec.
 
     Params:
-        inpath  - path to file to read
-        outpath - path to file to encode and write
+        inpath  - path to input file to read and encode
+        outpath - path to output file to write encoded data
     """
 
     # Open files for processing
@@ -151,7 +83,8 @@ def rle_encode(inpath, outpath):
     outfile = open(outpath, 'wb')
     size = os.path.getsize(inpath)
 
-    count, start, next = 1, b'', b''
+    # Initialize symbol counter and symbol trackers
+    (count, start, current) = (1, b'', b'')
 
     # Start compression using RLE codec
     if size:
@@ -160,32 +93,33 @@ def rle_encode(inpath, outpath):
 
     # Scan input for runs
     while size:
-        next = infile.read(1)
+        current = infile.read(1)
         size -= 1
 
-        if start == next and count < 256:
+        if start == current and count < 256:
             count += 1
         else:
-            outfile.write(bytes([count & 0xff]))
+            outfile.write(bytes([count & 0xFF]))
             outfile.write(start)
 
-            start = next
+            start = current
             count = 1
 
     # Output final run
-    outfile.write(bytes([count & 0xff]))
+    outfile.write(bytes([count & 0xFF]))
     outfile.write(start)
 
     infile.close()
     outfile.close()
 
+
 def rle_decode(inpath, outpath):
     """
-    Perform RLE codec on file.
+    Decode the input file using the RLE codec.
 
     Params:
-        infile  - path to file to decode
-        outfile - path to file to write
+        infile  - path to input file to read and decode
+        outfile - path to output file to write decoded data
     """
 
     # Open files for processing
@@ -205,28 +139,30 @@ def rle_decode(inpath, outpath):
     outfile.close()
 
 
-def hr_bytes(bytes):
+def hr_base2(x):
     """
-    Convert bytes to human readable format.
+    Convert a unit-less number to the equivalent scaled value using standard units (useful for human readable byte sizes).
+    Based on powers of 2 (ie Kilo is 2^10 not 10^3).
 
     Params:
-        bytes - number to convert
+        x - integer number to scale
 
     Returns:
         scaled - number in new base
-        symbol - base symbol
+        symbol - unit base symbol string
     """
 
-    symbols = ['', 'Ki', 'Mi', 'Gi', 'Ti', 'Pi', 'Ei', 'Zi', 'Yi']
+    symbols = ('', 'Ki', 'Mi', 'Gi', 'Ti', 'Pi', 'Ei', 'Zi', 'Yi')
     scale = 1024
+    unit = scale
 
     for symbol in symbols:
-        if bytes / scale < 1.0:
+        if x / unit < 1.0:
             break
 
-        scale = scale << 10
+        unit *= scale
 
-    return (bytes / (scale >> 10), symbol)
+    return (x / (unit / scale), symbol)
 
 
 if __name__ == '__main__':

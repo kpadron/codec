@@ -15,10 +15,10 @@ def main():
 
     # Handle argument parsing
     parser = argparse.ArgumentParser()
-    parser.add_argument('file', metavar='infile', nargs='+', default=[], help='file to compress or decompress')
+    parser.add_argument('file', metavar='INFILE', nargs='+', default=[], help='file to compress or decompress')
     parser.add_argument('-d', '--decompress', action='store_true', default=False, help='decompress files in list')
     parser.add_argument('-k', '--keep', action='store_true', default=False, help='keep original files (do not overwrite)')
-    parser.add_argument('-o', '--output-file', metavar='outfile', nargs='+', default=[], help='rename output file to %(metavar)s')
+    parser.add_argument('-o', '--output-file', metavar='OUTFILE', nargs='+', default=[], help='rename output file to %(metavar)s')
     parser.add_argument('-v', '--verbosity', action='count', default=0, help='increase output verbosity')
     args = parser.parse_args()
 
