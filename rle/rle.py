@@ -83,27 +83,26 @@ def rle_encode(inpath, outpath):
     outfile = open(outpath, 'wb')
     size = os.path.getsize(inpath)
 
-    # Initialize symbol counter and symbol trackers
-    (count, start, current) = (1, b'', b'')
+    # Initialize symbol trackers and counter
+    (start, current, count) = (b'', b'', 1)
 
     # Start compression using RLE codec
     if size:
         start = infile.read(1)
         size -= 1
 
-    # Scan input for runs
+    # Scan input for runs of repeated symbols
     while size:
         current = infile.read(1)
         size -= 1
 
-        if start == current and count < 256:
-            count += 1
-        else:
+        if current != start or count == 255:
             outfile.write(bytes([count & 0xFF]))
             outfile.write(start)
-
             start = current
             count = 1
+        else:
+            count += 1
 
     # Output final run
     outfile.write(bytes([count & 0xFF]))
