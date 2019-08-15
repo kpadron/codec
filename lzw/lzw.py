@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 import os
+import sys
 import argparse
-import time
 import itertools
+import time
 
 
 def main():
     """
-    Compress files with lzw codec.
+    Encode and decode files using the LZW codec.
 
     use -h or --help for more info
     """
@@ -17,7 +18,7 @@ def main():
     parser.add_argument('file', metavar='infile', nargs='+', default=[], help='file to compress or decompress')
     parser.add_argument('-d', '--decompress', action='store_true', default=False, help='decompress files in list')
     parser.add_argument('-k', '--keep', action='store_true', default=False, help='keep original files (do not overwrite)')
-    parser.add_argument('-o', '--output-file', metavar='OUTFILE', nargs='+', default=[], help='rename output file to %(metavar)s')
+    parser.add_argument('-o', '--output-file', metavar='outfile', nargs='+', default=[], help='rename output file to %(metavar)s')
     parser.add_argument('-v', '--verbosity', action='count', default=0, help='increase output verbosity')
     args = parser.parse_args()
 
@@ -40,7 +41,7 @@ def main():
 
                 lzw_encode(inpath, outpath)
             else:
-                print('error attempting to encode already compressed file')
+                print('error: attempting to encode already compressed file')
                 sys.exit(1)
         else:
             if inpath.endswith('.lzw'):
@@ -49,8 +50,8 @@ def main():
 
                 lzw_decode(inpath, outpath)
             else:
-                print('error attempting to decode non lzw file')
-                sys.exit(1)
+                print('error: attempting to decode non lzw file')
+                sys.exit(2)
 
         if not args.keep:
             os.remove(inpath)
@@ -63,16 +64,18 @@ def main():
 
         if args.verbosity > 1:
             print('size: %u -> %u (%.0f:1)' % (old_size, new_size, max(old_size, new_size) / min(old_size, new_size)))
-            print('time: %.2f seconds (%.1f %sB/s)' % (timediff, *hr_bytes(max(old_size, new_size) / timediff)))
+            print('time: %.2f seconds (%.1f %sB/s)' % (timediff, *hr_base2(max(old_size, new_size) / timediff)))
+
+        sys.exit()
 
 
 def lzw_encode(inpath, outpath):
     """
-    Perform LZW codec on file.
+    Encode the input file using the LZW codec.
 
     Params:
-        inpath  - path to file to read
-        outpath - path to file to encode and write
+        inpath  - path to input file to read and encode
+        outpath - path to output file to write encoded data
     """
 
     # Open files for processing
@@ -89,7 +92,8 @@ def lzw_encode(inpath, outpath):
     buffer = 0
     buffer_bits = 0
 
-    C, P = b'', b''
+    # Initialize pattern trackers
+    (C, P) = (b'', b'')
 
     # Start compression using LZW codec
     while size:
@@ -119,15 +123,15 @@ def lzw_encode(inpath, outpath):
         # Reset P
         P = C
 
-        # Write buffer blocks to file
+        # Write encoded bits to the output file
         while buffer_bits >= 8:
-            outfile.write(bytes([buffer & 0xff]))
+            outfile.write(bytes([buffer & 0xFF]))
             buffer >>= 8
             buffer_bits -= 8
 
     # No more data output final code for P
     while buffer_bits > 0:
-        outfile.write(bytes([buffer & 0xff]))
+        outfile.write(bytes([buffer & 0xFF]))
         buffer >>= 8
         buffer_bits -= 8
 
@@ -137,11 +141,11 @@ def lzw_encode(inpath, outpath):
 
 def lzw_decode(inpath, outpath):
     """
-    Perform LZW codec on file.
+    Decode the input file using the LZW codec.
 
     Params:
-        infile  - path to file to decode
-        outfile - path to file to write
+        infile  - path to input file to read and decode
+        outfile - path to output file to write decoded data
     """
 
     # Open files for processing
@@ -158,8 +162,9 @@ def lzw_decode(inpath, outpath):
     buffer = 0
     buffer_bits = 0
 
-    C, P, X, Y = 0, 0, b'', b''
-    once = True
+    # Initialize pattern trackers
+    (C, P, X, Y) = (0, 0, b'', b'')
+    first_output = True
 
     # Start decompression using LZW codec
     while size:
@@ -168,10 +173,10 @@ def lzw_decode(inpath, outpath):
         if max_code >= (1 << code_bits) - 1:
             code_bits += 1
 
-        # Read codes from file
+        # Fill buffer with encoded bits from the input file
         while buffer_bits < code_bits and size:
             b = infile.read(1)
-            buffer |= (b[0] & 0xff) << buffer_bits
+            buffer |= (b[0] & 0xFF) << buffer_bits
             buffer_bits += 8
             size -= 1
 
@@ -183,9 +188,9 @@ def lzw_decode(inpath, outpath):
         buffer >>= code_bits
         buffer_bits -= code_bits
 
-        # Only output during first iteration
-        if once:
-            once = False
+        # Need to output during the first iteration
+        if first_output:
+            first_output = False
             outfile.write(dictionary[C])
             continue
 
@@ -217,28 +222,30 @@ def lzw_decode(inpath, outpath):
     outfile.close()
 
 
-def hr_bytes(bytes):
+def hr_base2(x):
     """
-    Convert bytes to human readable format.
+    Convert a unit-less number to the equivalent scaled value using standard units (useful for human readable byte sizes).
+    Based on powers of 2 (ie Kilo is 2^10 not 10^3).
 
     Params:
-        bytes - number to convert
+        x - integer number to scale
 
     Returns:
         scaled - number in new base
-        symbol - base symbol
+        symbol - unit base symbol string
     """
 
-    symbols = ['', 'Ki', 'Mi', 'Gi', 'Ti', 'Pi', 'Ei', 'Zi', 'Yi']
+    symbols = ('', 'Ki', 'Mi', 'Gi', 'Ti', 'Pi', 'Ei', 'Zi', 'Yi')
     scale = 1024
+    unit = scale
 
     for symbol in symbols:
-        if bytes / scale < 1.0:
+        if x / unit < 1.0:
             break
 
-        scale = scale << 10
+        unit *= scale
 
-    return (bytes / (scale >> 10), symbol)
+    return (x / (unit / scale), symbol)
 
 
 if __name__ == '__main__':
