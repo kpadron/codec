@@ -63,7 +63,7 @@ def main():
             print('file: %s -> %s' % (inpath, outpath))
 
         if args.verbosity > 1:
-            print('size: %u -> %u (%.0f:1)' % (old_size, new_size, max(old_size, new_size) / min(old_size, new_size)))
+            print('size: %u -> %u (%.0f:1) [%.1f%% Compressed]' % (old_size, new_size, max(old_size, new_size) / min(old_size, new_size), (1 - min(old_size, new_size) / max(old_size, new_size)) * 100))
             print('time: %.2f seconds (%.1f %sB/s)' % (timediff, *hr_base2(max(old_size, new_size) / timediff)))
 
         sys.exit()
