@@ -4,7 +4,8 @@ import sys
 import argparse
 import time
 
-CRC_BLOCK_SIZE = 4096
+# Hash 10 MiB blocks from the file
+CRC_BLOCK_SIZE = (10 << 20)
 
 
 def main():
@@ -26,6 +27,9 @@ def main():
 
     # Loop through file list
     for inpath in args.file:
+        if os.path.isdir(inpath):
+            continue
+
         size = os.path.getsize(inpath)
         timediff = time.time()
 
@@ -39,7 +43,7 @@ def main():
                 size -= read_size
 
         timediff = time.time() - timediff
-        print('%s 0x%X' % (inpath, crc))
+        print('%s [%.1f %sB] 0x%X %d' % (inpath, *hr_base2(os.path.getsize(inpath)), crc, crc))
 
         if args.verbosity > 0:
             print('time: %.2f seconds (%.1f %sB/s)' % (timediff, *hr_base2(os.path.getsize(inpath) / timediff)))
@@ -51,6 +55,7 @@ def _crc_8(data: int, polynomial: int) -> int:
     """Manually calculates the 32-bit CRC value for the provided 8-bit input
     using the given reversed form CRC polynomial.
     """
+    polynomial &= 0xFFFFFFFF
     crc = data & 0xFF
 
     for _ in range(8):
