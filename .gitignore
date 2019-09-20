@@ -51,3 +51,10 @@ Module.symvers
 Mkfile.old
 dkms.conf
 *__pycache__*
+
+*.txt*
+*.ppm*
+*.rle*
+*.lzw*
+*.Z*
+*.hfm*
