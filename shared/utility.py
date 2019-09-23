@@ -2,30 +2,28 @@
 # Read 1 MiB from the a file at a time
 BLOCK_SIZE = (1 << 20)
 
-def filepath_bytes(filepath, buffer_size = 1, offset = None, block_size = BLOCK_SIZE):
+def filepath_bytes(filepath, offset = None, block_size = BLOCK_SIZE):
     """Generator function for reading bytes from a filepath in a for loop.
 
     Params:
-        file        - file object to read from
-        buffer_size - the maximum size of the returned bytes object per iteration
-        offset      - number of bytes to start from the beginning of the file
-        block_size  - the maximum number of bytes to read from the file at a time
+        filepath   - file path to read from
+        offset     - number of bytes to start from the beginning of the file
+        block_size - the maximum number of bytes to read from the file at a time
 
     Returns:
         The iterator for reading bytes from a file.
     """
     with open(filepath, 'rb') as file:
-        yield from file_bytes(file, buffer_size, offset, block_size)
+        yield from file_bytes(file, offset, block_size)
 
 
-def file_bytes(file, buffer_size = 1, offset = None, block_size = BLOCK_SIZE):
+def file_bytes(file, offset = None, block_size = BLOCK_SIZE):
     """Generator function for reading bytes from a file object in a for loop.
 
     Params:
-        file        - file object to read from
-        buffer_size - the maximum size of the returned bytes object per iteration
-        offset      - number of bytes to start from the beginning of the file
-        block_size  - the maximum number of bytes to read from the file at a time
+        file       - file object to read from
+        offset     - number of bytes to start from the beginning of the file
+        block_size - the maximum number of bytes to read from the file at a time
 
     Returns:
         The iterator for reading bytes from a file.
@@ -33,19 +31,15 @@ def file_bytes(file, buffer_size = 1, offset = None, block_size = BLOCK_SIZE):
     if offset is not None:
         file.seek(offset)
 
-    block_size = max(buffer_size, block_size)
     buffer = bytearray(block_size)
 
     while True:
         read_size = file.readinto(buffer)
-        partitions = (read_size + buffer_size - 1) // buffer_size
 
-        for i in range(partitions):
-            start = i * buffer_size
-            end = min(start + buffer_size, read_size)
-            yield bytes(buffer[start:end])
+        with memoryview(buffer)[:read_size] as view:
+            yield from view
 
-        if read_size < BLOCK_SIZE:
+        if read_size != block_size:
             break
 
 
@@ -68,15 +62,23 @@ def size_fmt(size: int, scale: int = 1024) -> str:
     return '%.1f Y' % (size)
 
 
-def rev_bits(n: int) -> int:
+def rev_bits(x: int, width: int = 0) -> int:
     """Return the given integer but with the bits reversed.
-    """
-    rev = 0
-    while n > 0:
-        rev <<= 1
-        if (n & 1) == 1:
-            rev ^= 1
 
-        n >>= 1
+    Params:
+        x     - integer to reverse
+        width - width of the integer (in bits)
+
+    Returns:
+        The reversed integer.
+    """
+    if not width:
+        width = x.bit_length()
+
+    rev = 0
+
+    for i in range(width):
+        bit = x & (1 << i)
+        if bit: rev |= (1 << (width - i - 1))
 
     return rev

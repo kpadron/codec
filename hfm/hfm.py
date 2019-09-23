@@ -82,7 +82,7 @@ def hfm_decode(inpath, outpath):
         rover = tree
 
         # Decode symbols using variable width bit codes
-        for code in util.filepath_bytes(inpath, data_offset):
+        for code in util.filepath_bytes(inpath, offset=data_offset):
             # Bit shift corresponding bit code into buffer
             buffer |= (code << buffer_bits)
             buffer_bits += 8
@@ -114,7 +114,7 @@ def hfm_decode(inpath, outpath):
 
 
 class HfmFileHeader:
-    info_format = '!B'
+    info_format = '!H'
     entry_format = '!BB'
     data_formats = ['!B', '!H', '!I', '!Q']
 
@@ -127,7 +127,7 @@ class HfmFileHeader:
         the encoded output file.
         """
         # Write number of frequency table entries to the output file
-        outfile.write(cls.info_struct.pack(len(freq_table) - 1))
+        outfile.write(cls.info_struct.pack(len(freq_table)))
 
         # Write frequency table to the output file
         for symbol in range(256):
@@ -158,7 +158,7 @@ class HfmFileHeader:
 
         with open(inpath, 'rb') as infile:
             # Unpack file header info from the encoded input file
-            freq_entries = cls.info_struct.unpack(infile.read(cls.info_struct.size))[0] + 1
+            freq_entries = cls.info_struct.unpack(infile.read(cls.info_struct.size))[0]
 
             # Read frequency table entries from the file header
             for _ in range(freq_entries):
@@ -209,6 +209,7 @@ class HfmTree:
         # Initialize sorted queue and leaf list
         queue = []
         leaves = []
+        tree = None
 
         # Create a leaf node for each symbol and add it to a sorted list (ascending stable)
         for symbol in range(256):
@@ -234,7 +235,8 @@ class HfmTree:
             # Insert new tree into sorted list (ties go right)
             cls.insort(queue, parent)
 
-        tree = queue[0]
+        if len(queue):
+            tree = queue[0]
 
         # Print debugging information
         if DEBUG_PRINT_TREE:
@@ -245,7 +247,7 @@ class HfmTree:
     @staticmethod
     def insort(sorted_list, new_item):
         """Simple insertion sort algorithm."""
-        for (index, item) enumerate(sorted_list):
+        for (index, item) in enumerate(sorted_list):
             if new_item < item:
                 sorted_list.insert(index, new_item)
                 return
@@ -314,7 +316,7 @@ def hfm_generate_codes(freq_table):
         (code, width) = HfmTree.leaf_code(leaf)
 
         # Add symbol code to the Huffman code table
-        code_table[leaf.key] = (util.rev_bits(code), width)
+        code_table[leaf.key] = (util.rev_bits(code, width), width)
 
     # Print debugging information
     if DEBUG_PRINT_TABLE:

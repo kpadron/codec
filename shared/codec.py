@@ -78,10 +78,14 @@ def codec_main(codec_name, codec_extension, encoder, decoder):
             out_str = f'{inpath} {old_size}B -> <{codec_name}> -> {outpath} {new_size}B'
 
             if VERBOSITY > 1:
-                ratio = max(old_size, new_size) / min(old_size, new_size)
+                min_size = min(old_size, new_size)
+                max_size = max(old_size, new_size)
 
-                out_str += ' (%.0f:1) [%.1f%% delta]' % (ratio, (1 - (1.0 / ratio)) * 100)
-                out_str += ' [%.2f s (%sB/s)]' % (timediff, util.size_fmt(max(old_size, new_size) / timediff))
+                if min_size > 0:
+                    ratio = max_size / min_size
+                    out_str += ' (%.0f:1) [%.1f%% delta]' % (ratio, (1 - (1.0 / ratio)) * 100)
+
+                out_str += ' [%.2f s (%sB/s)]' % (timediff, util.size_fmt(max_size / timediff))
 
             print(out_str)
 

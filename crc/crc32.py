@@ -61,8 +61,17 @@ def crc_file(inpath):
     """
     crc = 0
 
-    for buffer in util.filepath_bytes(inpath, BLOCK_SIZE):
-        crc = crc32(buffer, crc)
+    with open(inpath, 'rb') as infile:
+        buffer = bytearray(BLOCK_SIZE)
+
+        while True:
+            read_size = infile.readinto(buffer)
+
+            with memoryview(buffer)[:read_size] as view:
+                crc = crc32(view, crc)
+
+            if read_size != len(buffer):
+                break
 
     return crc
 
