@@ -1,13 +1,9 @@
 #!/usr/bin/env python3
-import shared.codec as codec
-import shared.utility as util
+import sys
+import struct
 
-def main():
-    """Encode and decode files using the LZW codec.
-
-    use -h or --help for more info
-    """
-    codec.codec_main('LZW', '.Z', lzw_encode, lzw_decode)
+sys.path.append('../shared')
+import utility as util
 
 
 def lzw_encode(inpath, outpath):
@@ -34,24 +30,23 @@ def lzw_encode(inpath, outpath):
         for b in util.filepath_bytes(inpath):
             # Find longest pattern in the dictionary that matches input
             C = bytes([b])
-            PC = b''.join([P, C]) # PC = P + C
+            PC = P + C # PC = P + C
             if PC in dictionary:
                 P = PC # P = P + C
                 continue
 
-            # Adjust code width if necessary
-            if max_code >= (1 << code_bits):
-                code_bits += 1
+            # Emit code for P
+            code = dictionary[P]
+            buffer |= ((code & ((1 << code_bits) - 1)) << buffer_bits)
+            buffer_bits += code_bits
 
             # Add P + C to the dictionary
             dictionary[PC] = max_code
             max_code += 1
 
-            # Emit code for P
-            code = dictionary[P]
-            print(code, code_bits)
-            buffer |= ((code & ((1 << code_bits) - 1)) << buffer_bits)
-            buffer_bits += code_bits
+            # Adjust code width if necessary
+            if max_code >= (1 << code_bits):
+                code_bits += 1
 
             # Reset P
             P = C
@@ -63,10 +58,15 @@ def lzw_encode(inpath, outpath):
                 buffer_bits -= 8
 
         # No more input data; output final code for P
-        while buffer_bits > 0:
-            outfile.write(bytes([buffer & 0xFF]))
-            buffer >>= 8
-            buffer_bits -= 8
+        code = dictionary.get(P)
+        if code is not None:
+            buffer |= ((code & ((1 << code_bits) - 1)) << buffer_bits)
+            buffer_bits += code_bits
+
+            while buffer_bits > 0:
+                outfile.write(bytes([buffer & 0xFF]))
+                buffer >>= 8
+                buffer_bits -= 8
 
 
 def lzw_decode(inpath, outpath):
@@ -79,7 +79,7 @@ def lzw_decode(inpath, outpath):
     # Initialize dictionary with all roots
     dictionary = {i: bytes([i]) for i in range(256)}
     max_code = 256
-    code_bits = 8
+    code_bits = 9
 
     # Initialize buffer for variable width codes
     buffer = 0
@@ -87,18 +87,17 @@ def lzw_decode(inpath, outpath):
 
     # Start decompression using LZW codec
     with open(outpath, 'wb') as outfile:
-        # Output pattern for first code
         infile_bytes = util.filepath_bytes(inpath)
-        C = next(infile_bytes)
-        outfile.write(dictionary[C])
+
+        # Output pattern for first code
+        try:
+            C = next(infile_bytes)
+            outfile.write(dictionary[C])
+        except StopIteration:
+            return
 
         # Decode all input codes
         for b in infile_bytes:
-            # Adjust code width if necessary
-            # Note: decoder is always one code behind encoder
-            if max_code >= (1 << code_bits) - 1:
-                code_bits += 1
-
             # Fill buffer with encoded bits from the input file
             buffer |= ((b & 0xFF) << buffer_bits)
             buffer_bits += 8
@@ -113,36 +112,44 @@ def lzw_decode(inpath, outpath):
             # Let C be a new code read from the buffer
             C = (buffer & ((1 << code_bits) - 1))
             buffer >>= code_bits
-            buffer_bits -= 8
+            buffer_bits -= code_bits
 
-            print(C)
-            print(P)
+            # Let W be the pattern for C
+            W = dictionary.get(C)
 
             # Let X be the pattern for P
-            X = dictionary[P]
+            X = dictionary.get(P)
 
-            if C in dictionary:
+            if W is not None:
                 # Emit pattern for C
-                outfile.write(dictionary[C])
+                outfile.write(W)
 
                 # Let Y be first byte of pattern for C
-                Y = dictionary[C][:1]
+                Y = W[:1]
 
-                # Add X + Y to dictionary
-                dictionary[max_code] = b''.join([X + Y]) # X + Y
-                max_code += 1
+                # Create X + Y
+                entry = X + Y
             else:
                 # Let Z be first byte of pattern for P
-                Z = dictionary[P][:1]
+                Z = X[:1]
+
+                # Create X + Z
+                entry = X + Z
 
                 # Emit pattern X + Z
-                XZ = b''.join([X, Z]) # XZ = X + Z
-                outfile.write(XZ)
+                outfile.write(entry)
 
-                # Add X + Z to dictionary
-                dictionary[max_code] = XZ
-                max_code += 1
+            # Add entry to dictionary
+            dictionary[max_code] = entry
+            max_code += 1
+
+            # Adjust code width if necessary
+            # Note: decoder is always one code behind encoder
+            if max_code >= (1 << code_bits) - 1:
+                code_bits += 1
 
 
 if __name__ == '__main__':
-    main()
+    import codec
+
+    sys.exit(codec.codec_main('LZW', '.Z', lzw_encode, lzw_decode))
