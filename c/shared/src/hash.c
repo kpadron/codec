@@ -10,8 +10,3 @@ int hash_main(int argc, char** argv, file_hasher_t hasher)
     printf("Hello, World!: %s\n", (const char*)str.data);
     return 0;
 }
-
-int main(int argc, char** argv)
-{
-    return hash_main(argc, argv, NULL);
-}
