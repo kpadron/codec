@@ -6,18 +6,22 @@ INCDIR = inc
 SRCDIR = src
 OBJDIR = .obj
 
-SRC = utility.c hash.c codec.c
-OBJ = $(SRC:%.c=$(OBJDIR)/%.o)
+LIBSRC = rle.c
+EXESRC = main.c
 
-TARGET = libshared.so #libshared.a
+LIBOBJ = $(LIBSRC:%.c=$(OBJDIR)/%.o)
+EXEOBJ = $(EXESRC:%.c=$(OBJDIR)/%.o)
+OBJ = $(LIBOBJ) $(EXEOBJ)
+
+TARGET = rle librle.so #librle.a
 
 vpath %.h $(INCDIR)
 vpath %.c $(SRCDIR)
 
-CPPFLAGS = -I $(INCDIR)
+CPPFLAGS = -I $(INCDIR) -I ../shared/inc/
 CFLAGS = -std=c99 -Wall -Wextra
 CCFLAGS = -fPIC -flto
-LDFLAGS = -fPIC -flto
+LDFLAGS = -fPIC -flto -Wl,-L../shared/,-lshared, -Wl,-rpath,../shared/
 ARFLAGS = rcs
 DEPFLAGS = -MMD -MP -MT $@ -MF $(OBJDIR)/$*.d
 
@@ -28,19 +32,31 @@ default: release
 clean:
 	$(RM) $(OBJDIR) $(TARGET)
 
+clean_shared:
+	$(MAKE) -C ../shared/ clean
+
 release: CPPFLAGS += -DNDEBUG
 release: CCFLAGS += -O2
 release: LDFLAGS += -O2 -s -Wl,-O2,-s
-release: $(TARGET)
+release: release_shared $(TARGET)
+
+release_shared:
+	$(MAKE) -C ../shared/ release
 
 debug: CCFLAGS += -g -ggdb3 -Og
-debug: $(TARGET)
+debug: debug_shared $(TARGET)
 
-libshared.a: $(OBJ)
+debug_shared:
+	$(MAKE) -C ../shared/ debug
+
+%.a: $(LIBOBJ)
 	$(AR) $(ARFLAGS) $@ $^
 
-libshared.so: $(OBJ)
+%.so: $(LIBOBJ)
 	$(CC) $(LDFLAGS) -shared $^ -o $@
+
+rle: $(LIBOBJ) $(EXEOBJ)
+	$(CC) $(LDFLAGS) -pie $^ -o $@
 
 $(OBJDIR)/%.o: %.c | $(OBJDIR)
 	$(CC) $(DEPFLAGS) $(CPPFLAGS) $(CFLAGS) $(CCFLAGS) -c $< -o $@

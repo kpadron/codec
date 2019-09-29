@@ -1,23 +1,36 @@
 CC = clang
 AR = ar
+RM = rm -rf
 
-CPPFLAGS = -I inc/ -I ../shared/inc/
+INCDIR = inc
+SRCDIR = src
+OBJDIR = .obj
+
+LIBSRC = crc.c
+EXESRC = main.c
+
+LIBOBJ = $(LIBSRC:%.c=$(OBJDIR)/%.o)
+EXEOBJ = $(EXESRC:%.c=$(OBJDIR)/%.o)
+OBJ = $(LIBOBJ) $(EXEOBJ)
+
+TARGET = crc libcrc.so #libcrc.a
+
+vpath %.h $(INCDIR)
+vpath %.c $(SRCDIR)
+
+CPPFLAGS = -I $(INCDIR) -I ../shared/inc/
 CFLAGS = -std=c99 -Wall -Wextra
 CCFLAGS = -fPIC -flto
 LDFLAGS = -fPIC -flto -Wl,-L../shared/,-lshared, -Wl,-rpath,../shared/
 ARFLAGS = rcs
-DEPFLAGS = -MMD -MP -MT $@ -MF $*.d
+DEPFLAGS = -MMD -MP -MT $@ -MF $(OBJDIR)/$*.d
 
-SRC = $(wildcard src/*.c)
-OBJ = $(SRC:.c=.o)
-DEPS = $(SRC:.c=.d)
-
-TARGET = crc libcrc.so #libcrc.a
+DEPS = $(OBJ:%.o=%.d)
 
 default: release
 
 clean:
-	$(RM) $(DEPS) $(OBJ) $(TARGET)
+	$(RM) $(OBJDIR) $(TARGET)
 
 clean_shared:
 	$(MAKE) -C ../shared/ clean
@@ -36,17 +49,20 @@ debug: debug_shared $(TARGET)
 debug_shared:
 	$(MAKE) -C ../shared/ debug
 
-libcrc.a: $(OBJ)
+%.a: $(LIBOBJ)
 	$(AR) $(ARFLAGS) $@ $^
 
-libcrc.so: $(OBJ)
+%.so: $(LIBOBJ)
 	$(CC) $(LDFLAGS) -shared $^ -o $@
 
-crc: $(OBJ)
+crc: $(LIBOBJ) $(EXEOBJ)
 	$(CC) $(LDFLAGS) -pie $^ -o $@
 
-%.o: %.c
+$(OBJDIR)/%.o: %.c | $(OBJDIR)
 	$(CC) $(DEPFLAGS) $(CPPFLAGS) $(CFLAGS) $(CCFLAGS) -c $< -o $@
+
+$(OBJDIR):
+	@mkdir -p $@
 
 $(DEPS):
 -include $(wildcard $(DEPS))

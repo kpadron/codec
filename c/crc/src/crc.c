@@ -1,7 +1,5 @@
 #include <stdio.h>
-#include <arpa/inet.h>
 
-#include "hash.h"
 #include "crc.h"
 
 #define CRC_BLOCK_SIZE ((size_t) 1 << 20) // 1 MiB
@@ -144,7 +142,7 @@ const uint32_t CRC32C_TABLE[256] =
     0xBE2DA0A5, 0x4C4623A6, 0x5F16D052, 0xAD7D5351,
 };
 
-static uint32_t internal_crc(const void* data, size_t size, uint32_t crc, const uint32_t table[256])
+static uint32_t internal_crc(const void* data, size_t size, uint32_t crc, const uint32_t table[static const restrict 256])
 {
     const uint8_t* p = (const uint8_t*) data;
     crc = ~crc;
@@ -168,12 +166,12 @@ static uint32_t internal_crc(const void* data, size_t size, uint32_t crc, const 
     return ~crc;
 }
 
-static uint32_t internal_crc_filepath(const char* path, const uint32_t table[256])
+static uint32_t internal_crc_filepath(const char* path, const uint32_t table[static const restrict 256])
 {
     FILE* f = fopen(path, "rb");
     if (f == NULL) return 0;
 
-    buffer_t buffer = alloc_buffer(CRC_BLOCK_SIZE);
+    buffer_t buffer = buffer_alloc(CRC_BLOCK_SIZE);
 
     if (!buffer.data)
     {
@@ -193,7 +191,7 @@ static uint32_t internal_crc_filepath(const char* path, const uint32_t table[256
         if (read_size != buffer.size) break;
     }
 
-    dealloc_buffer(&buffer);
+    buffer_dealloc(&buffer);
     fclose(f);
 
     return crc;
@@ -209,12 +207,12 @@ uint32_t crc32c(const void* data, size_t size)
     return internal_crc(data, size, 0, CRC32C_TABLE);
 }
 
-uint32_t crc32_buffer(buffer_t buffer)
+uint32_t crc32_buffer(const buffer_t buffer)
 {
     return crc32(buffer.data, buffer.size);
 }
 
-uint32_t crc32c_buffer(buffer_t buffer)
+uint32_t crc32c_buffer(const buffer_t buffer)
 {
     return crc32c(buffer.data, buffer.size);
 }
@@ -227,15 +225,4 @@ uint32_t crc32_filepath(const char* path)
 uint32_t crc32c_filepath(const char* path)
 {
     return internal_crc_filepath(path, CRC32C_TABLE);
-}
-
-static buffer_t hash_wrapper(const char* path)
-{
-    const uint32_t crc = htonl(crc32_filepath(path));
-    return copy_buffer(&crc, sizeof(crc));
-}
-
-int main(int argc, char** argv)
-{
-    return hash_main(argc, argv, "CRC-32", hash_wrapper);
 }

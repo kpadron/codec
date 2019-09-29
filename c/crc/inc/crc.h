@@ -1,5 +1,4 @@
 #pragma once
-
 #include "utility.h"
 
 // CRC-32 Table
@@ -19,10 +18,10 @@ uint32_t crc32(const void* data, size_t size);
 uint32_t crc32c(const void* data, size_t size);
 
 // Calculate the CRC-32 value of the data in the provided buffer
-uint32_t crc32_buffer(buffer_t buffer);
+uint32_t crc32_buffer(const buffer_t buffer);
 
 // Calculate the CRC-32C value of the data in the provided buffer
-uint32_t crc32c_buffer(buffer_t buffer);
+uint32_t crc32c_buffer(const buffer_t buffer);
 
 // Calculate the CRC-32 value of the file at the provided path
 uint32_t crc32_filepath(const char* path);
