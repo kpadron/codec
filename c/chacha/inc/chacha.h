@@ -4,11 +4,7 @@
 typedef struct chacha_ctx
 {
     uint32_t state[16];
-    union
-    {
-        uint32_t u32[16];
-        uint8_t u8[64];
-    } stream;
+    uint32_t stream[16];
     size_t index;
 } chacha_ctx;
 

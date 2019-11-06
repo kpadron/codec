@@ -41,42 +41,44 @@ static void store32_le(void* data, uint32_t value)
     p[3] = (uint8_t) (value >> 24);
 }
 
-static uint32_t rotl32(uint32_t value, uint32_t count)
+static uint32_t rotl32(uint32_t value, unsigned int count)
 {
-    return (value << count) ^ (value >> (32 - count));
+    return (value << count) | (value >> (32 - count));
 }
 
-static const size_t chacha_key_size = 32;
-static const size_t chacha_block_size = 64;
+#define CHACHA_SIGMA "expand 32-byte k"
+#define CHACHA_TAU "expand 16-byte k"
 
-static const char chacha_sigma[16] = "expand 32-byte k";
-static const char chacha_tau[16] = "expand 16-byte k";
+#define CHACHA_ROUNDS 20
+#define CHACHA_KEY_SIZE 32
+#define CHACHA_BLOCK_SIZE 64
+#define CHACHA_CONSTANT (CHACHA_KEY_SIZE == 32 ? CHACHA_SIGMA : CHACHA_TAU)
 
 static void chacha_quarter_round(uint32_t block[16], size_t a, size_t b, size_t c, size_t d)
 {
     // a += b; d ^= a; d <<<= 16;
-    block[a] += block[b];
-    block[d] = rotl32(block[a] ^ block[d], 16);
+    block[a] += block[b]; block[d] = rotl32(block[d] ^ block[a], 16);
 
-    // c += d; b ^= c; b <<<= 12
-    block[c] += block[d];
-    block[b] = rotl32(block[c] ^ block[b], 12);
+    // c += d; b ^= c; b <<<= 12;
+    block[c] += block[d]; block[b] = rotl32(block[b] ^ block[c], 12);
 
     // a += b; d ^= a; d <<<= 8;
-    block[a] += block[b];
-    block[d] = rotl32(block[a] ^ block[d], 8);
+    block[a] += block[b]; block[d] = rotl32(block[d] ^ block[a], 8);
 
     // c += d; b ^= c; b <<<= 7;
-    block[c] += block[d];
-    block[b] = rotl32(block[c] ^ block[b], 7);
+    block[c] += block[d]; block[b] = rotl32(block[b] ^ block[c], 7);
 }
 
 static void chacha_block(const uint32_t input[16], uint32_t output[16])
 {
-    memcpy(output, input, chacha_block_size);
+    size_t i;
 
-    // 10 iterations * 2 rounds per iteration = 20 rounds
-    for (size_t i = 0; i < 10; i++)
+    for (i = 0; i < 16; i++)
+    {
+        output[i] = input[i];
+    }
+
+    for (i = 0; i < CHACHA_ROUNDS; i += 2)
     {
         // Odd round
         chacha_quarter_round(output, 0, 4, 8, 12);
@@ -91,9 +93,9 @@ static void chacha_block(const uint32_t input[16], uint32_t output[16])
         chacha_quarter_round(output, 3, 4, 9, 14);
     }
 
-    for (size_t i = 0; i < 16; i++)
+    for (i = 0; i < 16; i++)
     {
-        store32_le(&output[i], input[i] + output[i]);
+        output[i] += input[i];
     }
 }
 
@@ -108,37 +110,28 @@ static void chacha_increment(uint32_t counter[4])
     }
 }
 
-static void chacha_generate_stream(chacha_ctx* ctx)
-{
-    chacha_block(ctx->state, ctx->stream.u32);
-    chacha_increment(&ctx->state[12]);
-    ctx->index = 0;
-}
-
 void chacha_init(chacha_ctx* ctx, const uint8_t key[32])
 {
-    const char* const constants = chacha_key_size == 32 ? chacha_sigma : chacha_tau;
-
     if (ctx == NULL || key == NULL) return;
 
-    ctx->state[0] = load32_le(constants + 0);
-    ctx->state[1] = load32_le(constants + 4);
-    ctx->state[2] = load32_le(constants + 8);
-    ctx->state[3] = load32_le(constants + 12);
+    ctx->state[0] = load32_le(CHACHA_CONSTANT + 0);
+    ctx->state[1] = load32_le(CHACHA_CONSTANT + 4);
+    ctx->state[2] = load32_le(CHACHA_CONSTANT + 8);
+    ctx->state[3] = load32_le(CHACHA_CONSTANT + 12);
     ctx->state[4] = load32_le(key + 0);
     ctx->state[5] = load32_le(key + 4);
     ctx->state[6] = load32_le(key + 8);
     ctx->state[7] = load32_le(key + 12);
-    ctx->state[8] = load32_le(key + 16 % chacha_key_size);
-    ctx->state[9] = load32_le(key + 20 % chacha_key_size);
-    ctx->state[10] = load32_le(key + 24 % chacha_key_size);
-    ctx->state[11] = load32_le(key + 28 % chacha_key_size);
+    ctx->state[8] = load32_le(key + 16 % CHACHA_KEY_SIZE);
+    ctx->state[9] = load32_le(key + 20 % CHACHA_KEY_SIZE);
+    ctx->state[10] = load32_le(key + 24 % CHACHA_KEY_SIZE);
+    ctx->state[11] = load32_le(key + 28 % CHACHA_KEY_SIZE);
     ctx->state[12] = 0;
     ctx->state[13] = 0;
     ctx->state[14] = 0;
     ctx->state[15] = 0;
 
-    ctx->index = chacha_block_size;
+    ctx->index = CHACHA_BLOCK_SIZE;
 }
 
 void chacha_wipe(chacha_ctx* ctx)
@@ -155,7 +148,7 @@ void chacha_start(chacha_ctx* ctx, const uint8_t nonce[16])
 
     memcpy(&ctx->state[12], nonce, 16);
 
-    ctx->index = chacha_block_size;
+    ctx->index = CHACHA_BLOCK_SIZE;
 }
 
 void chacha_start_block(chacha_ctx* ctx, uint64_t nonce, uint64_t block)
@@ -176,8 +169,8 @@ void chacha_start_block(chacha_ctx* ctx, uint64_t nonce, uint64_t block)
 
 void chacha_start_offset(chacha_ctx* ctx, uint64_t nonce, uint64_t offset)
 {
-    const uint64_t block = offset / chacha_block_size;
-    const size_t index = (size_t)(offset % chacha_block_size);
+    const uint64_t block = offset / CHACHA_BLOCK_SIZE;
+    const size_t index = (size_t)(offset % CHACHA_BLOCK_SIZE);
 
     if (ctx == NULL) return;
 
@@ -185,7 +178,8 @@ void chacha_start_offset(chacha_ctx* ctx, uint64_t nonce, uint64_t offset)
 
     if (index)
     {
-        chacha_generate_stream(ctx);
+        chacha_block(ctx->state, ctx->stream);
+        chacha_increment(&ctx->state[12]);
         ctx->index = index;
     }
 }
@@ -194,17 +188,22 @@ void chacha_update(chacha_ctx* ctx, const void* input, void* output, size_t size
 {
     const uint8_t* in = (const uint8_t*) input;
     uint8_t* out = (uint8_t*) output;
+    const uint8_t* stream;
 
     if (ctx == NULL || in == NULL || out == NULL || size == 0) return;
 
+    stream = (const uint8_t*) ctx->stream;
+
     while (size--)
     {
-        if (ctx->index >= chacha_block_size)
+        if (ctx->index >= CHACHA_BLOCK_SIZE)
         {
-            chacha_generate_stream(ctx);
+            chacha_block(ctx->state, ctx->stream);
+            chacha_increment(&ctx->state[12]);
+            ctx->index = 0;
         }
 
-        *out++ = *in++ ^ ctx->stream.u8[ctx->index++];
+        *out++ = *in++ ^ stream[ctx->index++];
     }
 }
 

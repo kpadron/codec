@@ -168,19 +168,19 @@ static uint32_t internal_crc(const void* data, size_t size, uint32_t crc, const 
 
 static uint32_t internal_crc_filepath(const char* path, const uint32_t table[static const restrict 256])
 {
-    FILE* f = fopen(path, "rb");
-    if (f == NULL) return 0;
+    FILE* f = NULL;
+    buffer_t buffer = UTIL_EMPTY_BUFFER;
+    uint32_t crc = 0;
 
-    buffer_t buffer = buffer_alloc(CRC_BLOCK_SIZE);
+    f = fopen(path, "rb");
 
-    if (!buffer.data)
-    {
-        fclose(f);
-        return 0;
-    }
+    if (f == NULL) goto error;
+
+    buffer = buffer_alloc(CRC_BLOCK_SIZE);
+
+    if (!buffer.data) goto error;
 
     setbuf(f, NULL);
-    uint32_t crc = 0;
 
     for (;;)
     {
@@ -191,8 +191,9 @@ static uint32_t internal_crc_filepath(const char* path, const uint32_t table[sta
         if (read_size != buffer.size) break;
     }
 
-    buffer_dealloc(&buffer);
-    fclose(f);
+error:
+    if (f != NULL) fclose(f);
+    if (buffer.data != NULL) buffer_dealloc(&buffer);
 
     return crc;
 }
