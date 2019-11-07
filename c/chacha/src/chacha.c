@@ -95,13 +95,15 @@ static void chacha_block(const uint32_t input[16], uint32_t output[16])
 
     for (i = 0; i < 16; i++)
     {
-        output[i] += input[i];
+        store32_le(&output[i], output[i] + input[i]);
     }
 }
 
 static void chacha_increment(uint32_t counter[4])
 {
-    for (size_t i = 0; i < 4; i++)
+    size_t i = 0;
+
+    for (; i < 4; i++)
     {
         if (++counter[i])
         {
@@ -146,25 +148,24 @@ void chacha_start(chacha_ctx* ctx, const uint8_t nonce[16])
 {
     if (ctx == NULL || nonce == NULL) return;
 
-    memcpy(&ctx->state[12], nonce, 16);
+    ctx->state[12] = load32_le(nonce + 0);
+    ctx->state[13] = load32_le(nonce + 4);
+    ctx->state[14] = load32_le(nonce + 8);
+    ctx->state[15] = load32_le(nonce + 12);
 
     ctx->index = CHACHA_BLOCK_SIZE;
 }
 
 void chacha_start_block(chacha_ctx* ctx, uint64_t nonce, uint64_t block)
 {
-    uint8_t tmp[16];
-
     if (ctx == NULL) return;
 
-    store32_le(tmp + 0, (uint32_t)(block >> 0));
-    store32_le(tmp + 4, (uint32_t)(block >> 32));
-    store32_le(tmp + 8, (uint32_t)(nonce >> 0));
-    store32_le(tmp + 12, (uint32_t)(nonce >> 32));
+    ctx->state[12] = (uint32_t)(block >> 0);
+    ctx->state[13] = (uint32_t)(block >> 32);
+    ctx->state[14] = (uint32_t)(nonce >> 0);
+    ctx->state[15] = (uint32_t)(nonce >> 32);
 
-    chacha_start(ctx, tmp);
-
-    memzeros(tmp, sizeof(tmp));
+    ctx->index = CHACHA_BLOCK_SIZE;
 }
 
 void chacha_start_offset(chacha_ctx* ctx, uint64_t nonce, uint64_t offset)
@@ -189,21 +190,57 @@ void chacha_update(chacha_ctx* ctx, const void* input, void* output, size_t size
     const uint8_t* in = (const uint8_t*) input;
     uint8_t* out = (uint8_t*) output;
     const uint8_t* stream;
+    size_t i;
 
     if (ctx == NULL || in == NULL || out == NULL || size == 0) return;
 
     stream = (const uint8_t*) ctx->stream;
 
-    while (size--)
+    for (; size > 0 && ctx->index <= CHACHA_BLOCK_SIZE; size--)
     {
-        if (ctx->index >= CHACHA_BLOCK_SIZE)
+        *out++ = *in++ ^ stream[ctx->index++];
+    }
+
+    while (size >= CHACHA_BLOCK_SIZE)
+    {
+        chacha_block(ctx->state, ctx->stream);
+        chacha_increment(&ctx->state[12]);
+
+        for (i = 0; i < CHACHA_BLOCK_SIZE; i += 16)
         {
-            chacha_block(ctx->state, ctx->stream);
-            chacha_increment(&ctx->state[12]);
-            ctx->index = 0;
+            out[i +  0] = in[i +  0] ^ stream[i +  0];
+            out[i +  1] = in[i +  1] ^ stream[i +  1];
+            out[i +  2] = in[i +  2] ^ stream[i +  2];
+            out[i +  3] = in[i +  3] ^ stream[i +  3];
+            out[i +  4] = in[i +  4] ^ stream[i +  4];
+            out[i +  5] = in[i +  5] ^ stream[i +  5];
+            out[i +  6] = in[i +  6] ^ stream[i +  6];
+            out[i +  7] = in[i +  7] ^ stream[i +  7];
+            out[i +  8] = in[i +  8] ^ stream[i +  8];
+            out[i +  9] = in[i +  9] ^ stream[i +  9];
+            out[i + 10] = in[i + 10] ^ stream[i + 10];
+            out[i + 11] = in[i + 11] ^ stream[i + 11];
+            out[i + 12] = in[i + 12] ^ stream[i + 12];
+            out[i + 13] = in[i + 13] ^ stream[i + 13];
+            out[i + 14] = in[i + 14] ^ stream[i + 14];
+            out[i + 15] = in[i + 15] ^ stream[i + 15];
         }
 
-        *out++ = *in++ ^ stream[ctx->index++];
+        out += CHACHA_BLOCK_SIZE;
+        in += CHACHA_BLOCK_SIZE;
+        size -= CHACHA_BLOCK_SIZE;
+    }
+
+    if (size > 0)
+    {
+        chacha_block(ctx->state, ctx->stream);
+        chacha_increment(&ctx->state[12]);
+        ctx->index = size;
+
+        for (i = 0; i < size; i++)
+        {
+            out[i] = in[i] ^ stream[i];
+        }
     }
 }
 
