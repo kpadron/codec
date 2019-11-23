@@ -7,16 +7,11 @@
 
 #define FILE_BLOCK_SIZE (1 << 20)
 
-#define CHACHA_ROUNDS 20
-#define CHACHA_KEY_SIZE 32
+#define MIN(x, y) ((x) <= (y) ? (x) : (y))
 
-#ifndef inline
-#define inline __inline
-#endif
-
-static inline void memwipe(void* data, size_t size)
+static void memwipe(void* data, size_t size)
 {
-    volatile uint8_t* p = (volatile uint8_t*) data;
+    volatile u8* p = (volatile u8*) data;
 
     while (size--)
     {
@@ -24,7 +19,7 @@ static inline void memwipe(void* data, size_t size)
     }
 }
 
-static inline uint32_t bswap32(uint32_t value)
+static u32 bswap32(u32 value)
 {
     #if defined(__GNUC__) || defined(__clang__)
     return __builtin_bswap32(value);
@@ -41,16 +36,16 @@ static inline uint32_t bswap32(uint32_t value)
     #endif
 }
 
-static inline uint32_t load32(const void* data)
+static u32 load32(const void* data)
 {
-    uint32_t value;
+    u32 value;
     memcpy(&value, data, sizeof(value));
     return value;
 }
 
-static inline uint32_t load32_le(const void* data)
+static u32 load32_le(const void* data)
 {
-    uint32_t value = load32(data);
+    u32 value = load32(data);
 
     #if __BYTE_ORDER__ != __ORDER_LITTLE_ENDIAN__
     value = bswap32(value);
@@ -59,12 +54,12 @@ static inline uint32_t load32_le(const void* data)
     return value;
 }
 
-static inline void store32(void* data, uint32_t value)
+static void store32(void* data, u32 value)
 {
     memcpy(data, &value, sizeof(value));
 }
 
-static inline void store32_le(void* data, uint32_t value)
+static void store32_le(void* data, u32 value)
 {
     #if __BYTE_ORDER__ != __ORDER_LITTLE_ENDIAN__
     value = bswap32(value);
@@ -73,7 +68,7 @@ static inline void store32_le(void* data, uint32_t value)
     store32(data, value);
 }
 
-static inline uint32_t rotl32(uint32_t value, unsigned int count)
+static u32 rotl32(u32 value, u32 count)
 {
     #if defined(_MSC_VER)
     return _rotl(value, (int) count);
@@ -85,14 +80,31 @@ static inline uint32_t rotl32(uint32_t value, unsigned int count)
     #endif
 }
 
-#define CHACHA_BLOCK_SIZE 64
+static void xor_block(void* dst, const void* src1, const void* src2, size_t size)
+{
+    u8* x = (u8*) dst;
+    const u8* y = (const u8*) src1;
+    const u8* z = (const u8*) src2;
+
+    // Hoping the compiler chooses SIMD instructions
+    while (size--)
+    {
+        *x++ = *y++ ^ *z++;
+    }
+}
+
+static const size_t CHACHA_BLOCK_SIZE = 64;
 
 #define CHACHA_SIGMA "expand 32-byte k"
 #define CHACHA_TAU "expand 16-byte k"
-#define CHACHA_CONSTANT (CHACHA_KEY_SIZE == 32 ? CHACHA_SIGMA : CHACHA_TAU)
+#if CHACHA_KEY_SIZE == 32
+static const char CHACHA_CONSTANT[] = CHACHA_SIGMA;
+#else
+static const char CHACHA_CONSTANT[] = CHACHA_TAU;
+#endif
 
 // Perform the ChaCha quarter round
-static inline void chacha_quarter_round(uint32_t block[16], size_t a, size_t b, size_t c, size_t d)
+static void chacha_quarter_round(u32 block[16], size_t a, size_t b, size_t c, size_t d)
 {
     // a += b; d ^= a; d <<<= 16;
     block[a] += block[b]; block[d] = rotl32(block[d] ^ block[a], 16);
@@ -108,11 +120,9 @@ static inline void chacha_quarter_round(uint32_t block[16], size_t a, size_t b, 
 }
 
 // Increment 128-bit (16-byte) nonce as little-endian counter
-static inline void chacha_increment(uint32_t counter[4])
+static inline void chacha_increment(u32 counter[4])
 {
-    size_t i;
-
-    for (i = 0; i < 4; i++)
+    for (size_t i = 0; i < 4; i++)
     {
         if (++counter[i])
         {
@@ -122,14 +132,13 @@ static inline void chacha_increment(uint32_t counter[4])
 }
 
 // Generate ChaCha cipher keystream
-static void chacha_block(const uint32_t input[16], uint32_t output[16])
+static void chacha_block(const u32 input[16], u32 output[16])
 {
-    size_t i;
-
+    // Load initial state into output buffer
     memcpy(output, input, CHACHA_BLOCK_SIZE);
 
     // Perform ChaCha rounds
-    for (i = 0; i < CHACHA_ROUNDS; i += 2)
+    for (size_t i = 0; i < CHACHA_ROUNDS; i += 2)
     {
         // Odd round
         chacha_quarter_round(output, 0, 4, 8, 12);
@@ -145,14 +154,20 @@ static void chacha_block(const uint32_t input[16], uint32_t output[16])
     }
 
     // Encode generated keystream window
-    for (i = 0; i < 16; i++)
+    for (size_t i = 0; i < 16; i++)
     {
-        store32_le(&output[i], output[i] + input[i]);
+        store32_le(output + i, output[i] + input[i]);
     }
 }
 
+// Xor ChaCha keystream with data block
+static void chacha_xor_block(const u8 stream[64], const u8 input[64], u8 output[64])
+{
+    xor_block(output, input, stream, CHACHA_BLOCK_SIZE);
+}
+
 // Set initial state for ChaCha cipher context
-void chacha_init(chacha_ctx* ctx, const uint8_t key[32])
+void chacha_init(chacha_ctx* ctx, const u8 key[32])
 {
     if (ctx == NULL || key == NULL) return;
 
@@ -193,7 +208,7 @@ void chacha_wipe(chacha_ctx* ctx)
 
 // Seek to the relevant block in the keystream based on
 // 128-bit (16-byte) nonce
-void chacha_seek(chacha_ctx* ctx, const uint8_t nonce[16])
+void chacha_seek(chacha_ctx* ctx, const u8 nonce[16])
 {
     if (ctx == NULL || nonce == NULL) return;
 
@@ -207,26 +222,26 @@ void chacha_seek(chacha_ctx* ctx, const uint8_t nonce[16])
 
 // Seek to the relevant block in the keystream based on
 // 64-bit (8-byte) nonce and block counter
-void chacha_seek_block(chacha_ctx* ctx, uint64_t nonce, uint64_t block)
+void chacha_seek_block(chacha_ctx* ctx, u64 nonce, u64 block)
 {
     if (ctx == NULL) return;
 
-    ctx->state[12] = (uint32_t)(block >> 0);
-    ctx->state[13] = (uint32_t)(block >> 32);
-    ctx->state[14] = (uint32_t)(nonce >> 0);
-    ctx->state[15] = (uint32_t)(nonce >> 32);
+    ctx->state[12] = (u32)(block >> 0);
+    ctx->state[13] = (u32)(block >> 32);
+    ctx->state[14] = (u32)(nonce >> 0);
+    ctx->state[15] = (u32)(nonce >> 32);
 
     ctx->index = CHACHA_BLOCK_SIZE;
 }
 
 // Seek to the relevant byte in the keystream based on
 // 64-bit (8-byte) nonce and byte offset
-void chacha_seek_offset(chacha_ctx* ctx, uint64_t nonce, uint64_t offset)
+void chacha_seek_offset(chacha_ctx* ctx, u64 nonce, u64 offset)
 {
-    const uint64_t block = offset / CHACHA_BLOCK_SIZE;
-    const uint64_t index = offset % CHACHA_BLOCK_SIZE;
-
     if (ctx == NULL) return;
+
+    const u64 block = offset / CHACHA_BLOCK_SIZE;
+    const u64 index = offset % CHACHA_BLOCK_SIZE;
 
     // Seek to relevant keystream block
     chacha_seek_block(ctx, nonce, block);
@@ -235,7 +250,7 @@ void chacha_seek_offset(chacha_ctx* ctx, uint64_t nonce, uint64_t offset)
     if (index)
     {
         chacha_block(ctx->state, ctx->stream);
-        chacha_increment(&ctx->state[12]);
+        chacha_increment(ctx->state + 12);
         ctx->index = (size_t) index;
     }
 }
@@ -243,64 +258,45 @@ void chacha_seek_offset(chacha_ctx* ctx, uint64_t nonce, uint64_t offset)
 // Crypt bytes based on ChaCha cipher context
 void chacha_update(chacha_ctx* ctx, const void* input, void* output, size_t size)
 {
-    uint8_t* out = (uint8_t*) output;
-    const uint8_t* in = (const uint8_t*) input;
-    const uint8_t* stream;
-    size_t i;
+    if (ctx == NULL || input == NULL || output == NULL || size == 0) return;
 
-    if (ctx == NULL || in == NULL || out == NULL || size == 0) return;
+    const u8* const stream = (const u8*) ctx->stream;
+    const u8* in = (const u8*) input;
+    u8* out = (u8*) output;
 
-    stream = (const uint8_t*) ctx->stream;
-
-    for (; size > 0 && ctx->index <= CHACHA_BLOCK_SIZE; size--)
+    if (size > 0 && ctx->index < CHACHA_BLOCK_SIZE)
     {
-        *out++ = *in++ ^ stream[ctx->index++];
+        const size_t msize = MIN(size, CHACHA_BLOCK_SIZE - ctx->index);
+
+        xor_block(out, in, stream + ctx->index, msize);
+
+        in += msize;
+        out += msize;
+        ctx->index += msize;
+        size -= msize;
     }
 
     while (size >= CHACHA_BLOCK_SIZE)
     {
         chacha_block(ctx->state, ctx->stream);
-        chacha_increment(&ctx->state[12]);
+        chacha_increment(ctx->state + 12);
+        xor_block(out, in, stream, CHACHA_BLOCK_SIZE);
 
-        for (i = 0; i < CHACHA_BLOCK_SIZE; i += 16)
-        {
-            out[i +  0] = in[i +  0] ^ stream[i +  0];
-            out[i +  1] = in[i +  1] ^ stream[i +  1];
-            out[i +  2] = in[i +  2] ^ stream[i +  2];
-            out[i +  3] = in[i +  3] ^ stream[i +  3];
-            out[i +  4] = in[i +  4] ^ stream[i +  4];
-            out[i +  5] = in[i +  5] ^ stream[i +  5];
-            out[i +  6] = in[i +  6] ^ stream[i +  6];
-            out[i +  7] = in[i +  7] ^ stream[i +  7];
-            out[i +  8] = in[i +  8] ^ stream[i +  8];
-            out[i +  9] = in[i +  9] ^ stream[i +  9];
-            out[i + 10] = in[i + 10] ^ stream[i + 10];
-            out[i + 11] = in[i + 11] ^ stream[i + 11];
-            out[i + 12] = in[i + 12] ^ stream[i + 12];
-            out[i + 13] = in[i + 13] ^ stream[i + 13];
-            out[i + 14] = in[i + 14] ^ stream[i + 14];
-            out[i + 15] = in[i + 15] ^ stream[i + 15];
-        }
-
-        out += CHACHA_BLOCK_SIZE;
         in += CHACHA_BLOCK_SIZE;
+        out += CHACHA_BLOCK_SIZE;
         size -= CHACHA_BLOCK_SIZE;
     }
 
     if (size > 0)
     {
         chacha_block(ctx->state, ctx->stream);
-        chacha_increment(&ctx->state[12]);
+        chacha_increment(ctx->state + 12);
+        xor_block(out, in, stream, size);
         ctx->index = size;
-
-        for (i = 0; i < size; i++)
-        {
-            out[i] = in[i] ^ stream[i];
-        }
     }
 }
 
-void chacha_crypt(const uint8_t key[32], const uint8_t nonce[16], const void* input, void* output, size_t size)
+void chacha_crypt(const u8 key[32], const u8 nonce[16], const void* input, void* output, size_t size)
 {
     chacha_ctx ctx;
 
@@ -312,7 +308,7 @@ void chacha_crypt(const uint8_t key[32], const uint8_t nonce[16], const void* in
     chacha_wipe(&ctx);
 }
 
-void chacha_crypt_block(const uint8_t key[32], uint64_t nonce, uint64_t block, const void* input, void* output, size_t size)
+void chacha_crypt_block(const u8 key[32], u64 nonce, u64 block, const void* input, void* output, size_t size)
 {
     chacha_ctx ctx;
 
@@ -324,7 +320,7 @@ void chacha_crypt_block(const uint8_t key[32], uint64_t nonce, uint64_t block, c
     chacha_wipe(&ctx);
 }
 
-void chacha_crypt_offset(const uint8_t key[32], uint64_t nonce, uint64_t offset, const void* input, void* output, size_t size)
+void chacha_crypt_offset(const u8 key[32], u64 nonce, u64 offset, const void* input, void* output, size_t size)
 {
     chacha_ctx ctx;
 
@@ -336,12 +332,12 @@ void chacha_crypt_offset(const uint8_t key[32], uint64_t nonce, uint64_t offset,
     chacha_wipe(&ctx);
 }
 
-void chacha_encode_buffer(buffer_t buffer, const uint8_t key[32], const uint8_t nonce[16])
+void chacha_encode_buffer(buffer_t buffer, const u8 key[32], const u8 nonce[16])
 {
     chacha_crypt(key, nonce, buffer.data, buffer.data, buffer.size);
 }
 
-void chacha_decode_buffer(buffer_t buffer, const uint8_t key[32], const uint8_t nonce[16])
+void chacha_decode_buffer(buffer_t buffer, const u8 key[32], const u8 nonce[16])
 {
     chacha_crypt(key, nonce, buffer.data, buffer.data, buffer.size);
 }
@@ -350,13 +346,13 @@ void chacha_encode_filepath(const char* inpath, const char* outpath)
 {
     FILE* infile = fopen(inpath, "rb");
     FILE* outfile = fopen(outpath, "wb");
-    uint8_t* buffer = (uint8_t*) malloc(FILE_BLOCK_SIZE);
+    u8* buffer = (u8*) malloc(FILE_BLOCK_SIZE);
     chacha_ctx ctx;
 
     if (infile == NULL || outfile == NULL || buffer == NULL) goto error;
 
-    chacha_init(&ctx, (const uint8_t[32]){ 0 });
-    chacha_start(&ctx, (const uint8_t[16]){ 0 });
+    chacha_init(&ctx, (const u8[32]){ 0 });
+    chacha_start(&ctx, (const u8[16]){ 0 });
 
     for (;;)
     {
