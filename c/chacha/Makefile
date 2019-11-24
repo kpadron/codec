@@ -29,7 +29,7 @@ vpath %.c $(SRCDIR)
 
 CPPFLAGS = $(INC)
 CFLAGS = -std=c99 -Wall -Wextra
-CCFLAGS = -march=native -fPIC -flto=auto -fuse-linker-plugin -ffat-lto-objects
+CCFLAGS = -march=native -fopenmp -fPIC -flto=auto -fuse-linker-plugin -ffat-lto-objects
 LDFLAGS = -L $(LIBDIR) -Wl,-z,relro,-z,now
 LDLIBS = $(LIB)
 ARFLAGS = -rUcus

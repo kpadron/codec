@@ -2,9 +2,66 @@
 #include <stdbool.h>
 #include <errno.h>
 
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <sys/mman.h>
+#include <fcntl.h>
+#include <unistd.h>
+
 #include "chacha.h"
 
-#define BUFFER_SIZE (1 << 16)
+#define BUFFER_SIZE (1 << 21)
+#define FILE_SIZE_THRESHOLD (1 << 30)
+
+static size_t filesize(const char* filename)
+{
+    size_t size = 0;
+    struct stat sb;
+
+    if (stat(filename, &sb) != -1)
+    {
+        size = (size_t) sb.st_size;
+    }
+
+    return size;
+}
+
+static u8* filemap(const char* filename, size_t size)
+{
+    u8* mapping = NULL;
+    int fd = open(filename, O_RDWR);
+
+    if (fd == -1)
+    {
+        goto error;
+    }
+
+    mapping = (u8*) mmap(NULL, size, PROT_READ |
+        PROT_WRITE, MAP_SHARED, fd, 0);
+
+    if (mapping != MAP_FAILED)
+    {
+        goto exit;
+    }
+
+error:
+    fprintf(stderr, "[filemap] failed to memory map '%s' %zu: %s\n",
+        filename, size, strerror(errno));
+
+    mapping = NULL;
+
+exit:
+    return mapping;
+}
+
+static void fileunmap(void* mapping, size_t size)
+{
+    if (munmap(mapping, size) != 0)
+    {
+        fprintf(stderr, "[fileunmap] failed to unmap memory '%p' %zu: %s\n",
+            mapping, size, strerror(errno));
+    }
+}
 
 static bool copy_file(const char* inpath, const char* outpath)
 {
@@ -148,6 +205,62 @@ error:
     return success;
 }
 
+#include <omp.h>
+
+#define BLOCK_OFFSET(id, total, size) ((id) * (size) / (total))
+#define BLOCK_SIZE(id, total, size) (BLOCK_OFFSET((id) + 1, (total), (size)) - BLOCK_OFFSET((id), (total), (size)))
+
+bool crypt_file_parallel(const char* path, const u8 key[CHACHA_KEY_SIZE])
+{
+    size_t size = filesize(path);
+    u8* fdata = filemap(path, size);
+    bool success = true;
+
+    // Handle file or allocation failure
+    if (fdata == NULL || size == 0)
+    {
+        goto error;
+    }
+
+    // Determine total parallel threads
+
+    printf("Using %d parallel threads...\n", omp_get_max_threads());
+
+    // Distribute file blocks to parallel threads
+    #pragma omp parallel
+    {
+        // Get current thread id
+        const int id = omp_get_thread_num();
+        const int total = omp_get_num_threads();
+
+        // Determine file data block for this thread
+        const size_t block_offset = BLOCK_OFFSET(id, total, size);
+        const size_t block_size = BLOCK_SIZE(id, total, size);
+        u8* const block = fdata + block_offset;
+
+        printf("Thread %d/%d %p %zu %zu\n", id, total, block, block_offset, block_size);
+
+        // Crypt thread local file data block
+        chacha_crypt_offset(key, 0, block_offset, block, block, block_size);
+    }
+
+    goto exit;
+
+error:
+    fprintf(stderr, "[crypt_file_parallel] crypting '%s' failed: %s\n",
+            path, strerror(errno));
+
+    success = false;
+
+exit:
+    if (fdata != NULL)
+    {
+        fileunmap(fdata, size);
+    }
+
+    return success;
+}
+
 int main(int argc, char** argv)
 {
     u8 key_buffer[CHACHA_KEY_SIZE] = { 0 };
@@ -173,15 +286,21 @@ int main(int argc, char** argv)
 
     printf("Crypting '%s' to '%s' using ChaCha cipher...\n", inpath, outpath);
 
-    // Crypt file in-place
-    if (inpath == outpath || strcmp(inpath, outpath) == 0)
-    {
-        success = crypt_file_inplace(inpath, key_buffer);
-    }
     // Copy input file to output path then crypt in-place
-    else
+    if (inpath != outpath && strcmp(inpath, outpath) != 0)
     {
         success = copy_file(inpath, outpath);
+    }
+
+    // Crypt file in parallel if below size threshold
+    if (filesize(outpath) <= FILE_SIZE_THRESHOLD)
+    {
+        success = success && crypt_file_parallel(outpath, key_buffer);
+    }
+    // Crypt file using normal single threaded I/O
+    else
+    {
+
         success = success && crypt_file_inplace(outpath, key_buffer);
     }
 
