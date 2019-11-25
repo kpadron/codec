@@ -4,14 +4,10 @@
 
 #include <sys/types.h>
 #include <sys/stat.h>
-#include <sys/mman.h>
-#include <fcntl.h>
-#include <unistd.h>
 
 #include "chacha.h"
 
-#define BUFFER_SIZE (1 << 21)
-#define FILE_SIZE_THRESHOLD (1 << 30)
+#define BUFFER_SIZE (1 << 16)
 
 static size_t filesize(const char* filename)
 {
@@ -26,56 +22,15 @@ static size_t filesize(const char* filename)
     return size;
 }
 
-static u8* filemap(const char* filename, size_t size)
-{
-    u8* mapping = NULL;
-    int fd = open(filename, O_RDWR);
-
-    if (fd == -1)
-    {
-        goto error;
-    }
-
-    mapping = (u8*) mmap(NULL, size, PROT_READ |
-        PROT_WRITE, MAP_SHARED, fd, 0);
-
-    if (mapping != MAP_FAILED)
-    {
-        goto exit;
-    }
-
-error:
-    fprintf(stderr, "[filemap] failed to memory map '%s' %zu: %s\n",
-        filename, size, strerror(errno));
-
-    mapping = NULL;
-
-exit:
-    return mapping;
-}
-
-static void fileunmap(void* mapping, size_t size)
-{
-    if (munmap(mapping, size) != 0)
-    {
-        fprintf(stderr, "[fileunmap] failed to unmap memory '%p' %zu: %s\n",
-            mapping, size, strerror(errno));
-    }
-}
-
 static bool copy_file(const char* inpath, const char* outpath)
 {
     FILE* infile = fopen(inpath, "rb");
     FILE* outfile = fopen(outpath, "wb");
-    u8* const buffer = (u8*) malloc(BUFFER_SIZE);
-    bool success = false;
+    bool success = true;
 
     // Handle file or allocation failure
-    if (infile == NULL || outfile == NULL || buffer == NULL)
+    if (infile == NULL || outfile == NULL)
     {
-        fprintf(stderr, "[copy_file] copy '%s' to '%s' failed: %s\n",
-            inpath, outpath, strerror(errno));
-
         goto error;
     }
 
@@ -86,28 +41,33 @@ static bool copy_file(const char* inpath, const char* outpath)
     // Copy file blocks
     for (;;)
     {
+        u8 buffer[BUFFER_SIZE];
+
         // Read into buffer then write buffer
         const size_t read_size = fread(buffer, 1, BUFFER_SIZE, infile);
         const size_t write_size = fwrite(buffer, 1, read_size, outfile);
 
-        // Check for EOF and display errors
+        // Check for EOF and errors
         if (read_size != BUFFER_SIZE || read_size != write_size)
         {
-            if (!ferror(infile) && !ferror(outfile))
+            if (ferror(infile) || ferror(outfile))
             {
-                success = true;
-            }
-            else
-            {
-                fprintf(stderr, "[copy_file] copy '%s' to '%s' failed: %s\n",
-                    inpath, outpath, strerror(errno));
+                goto error;
             }
 
             break;
         }
     }
 
+    goto exit;
+
 error:
+    fprintf(stderr, "[copy_file] copy '%s' to '%s' failed: %s\n",
+            inpath, outpath, strerror(errno));
+
+    success = false;
+
+exit:
     // Close input file
     if (infile != NULL)
     {
@@ -120,128 +80,94 @@ error:
         fclose(outfile);
     }
 
-    // Securely wipe buffer and free memory
-    if (buffer != NULL)
-    {
-        memwipe(buffer, BUFFER_SIZE);
-        free(buffer);
-    }
-
     return success;
 }
 
-static bool crypt_file_inplace(const char* path, const u8 key[CHACHA_KEY_SIZE])
+bool crypt_file_parallel(const char* path, const u8 key[CHACHA_KEY_SIZE])
 {
+    size_t size = filesize(path);
     FILE* file = fopen(path, "rb+");
-    u8* const buffer = (u8*) malloc(BUFFER_SIZE);
-    bool success = false;
-    chacha_ctx ctx;
+    const size_t full_blocks = size / BUFFER_SIZE;
+    const size_t partial_size = size % BUFFER_SIZE;
+    bool success = true;
 
     // Handle file or allocation failure
-    if (file == NULL || buffer == NULL)
+    if (file == NULL || size == 0)
     {
-        fprintf(stderr, "[crypt_file_inplace] crypting '%s' failed: %s\n",
-            path, strerror(errno));
-
         goto error;
     }
 
     // Disable I/O buffering
     setbuf(file, NULL);
 
-    // Initialize chacha context with key. Starts the stream counter at 0.
-    // Uses a nonce with all zero bytes. NOTE: reusing a nonce value with the same
-    // key when encrypting two different plaintexts will void the security of the cipher.
-    // This example always uses a nonce of all zero bytes and is only for testing purposes.
-    chacha_init(&ctx, key);
-
-    // Crypt blocks from the input file and write to the output file
-    for (;;)
+    // Process full blocks of file data (using parallel threads if possible)
+    #pragma omp parallel for default(shared) schedule(nonmonotonic:dynamic)
+    for (size_t i = 0; i < full_blocks; i++)
     {
-        // Read data into buffer
-        const size_t read_size = fread(buffer, 1, BUFFER_SIZE, file);
+        const u64 offset = i * BUFFER_SIZE;
+        u8 buffer[BUFFER_SIZE];
 
-        // Crypt data in buffer
-        chacha_update(&ctx, buffer, buffer, read_size);
-
-        // Go back and write crypted buffer data
-        fseek(file, -((long) read_size), SEEK_CUR);
-        const size_t write_size = fwrite(buffer, 1, read_size, file);
-
-        // Check for EOF and display errors
-        if (read_size != BUFFER_SIZE || read_size != write_size)
+        // Seekt to correct file position and read into buffer
+        #pragma omp critical(file)
         {
-            if (!ferror(file))
+            if (success)
             {
-                success = true;
-            }
-            else
-            {
-                fprintf(stderr, "[crypt_file_inplace] crypting '%s' failed: %s\n",
-                    path, strerror(errno));
-            }
+                fseek(file, (long int) offset, SEEK_SET);
+                size_t read_size = fread(buffer, 1, BUFFER_SIZE, file);
 
-            break;
+                if (read_size != BUFFER_SIZE)
+                {
+                    success = false;
+                }
+            }
+        }
+
+        // Uses a nonce with all zero bytes. NOTE: reusing a nonce value with the same
+        // key when encrypting two different plaintexts will void the security of the cipher.
+        // This example always uses a nonce of all zero bytes and is only for testing purposes.
+
+        // Crypt local file data
+        chacha_crypt_offset(key, 0, offset, buffer, buffer, BUFFER_SIZE);
+
+        // Seek to correct file position and write crypted data
+        #pragma omp critical(file)
+        {
+            if (success)
+            {
+                fseek(file, (long int) offset, SEEK_SET);
+                size_t write_size = fwrite(buffer, 1, BUFFER_SIZE, file);
+
+                if (write_size != BUFFER_SIZE)
+                {
+                    success = false;
+                }
+            }
         }
     }
 
-    // Securely teardown the chacha context
-    chacha_wipe(&ctx);
-
-error:
-    // Close input file
-    if (file != NULL)
+    // Handle last partial block of file data
+    if (partial_size > 0)
     {
-        fclose(file);
-    }
+        const size_t offset = full_blocks * BUFFER_SIZE;
+        u8 buffer[BUFFER_SIZE];
 
-    // Securely wipe buffer and free memory
-    if (buffer != NULL)
-    {
-        memwipe(buffer, BUFFER_SIZE);
-        free(buffer);
-    }
+        fseek(file, (long int) offset, SEEK_SET);
+        size_t read_size = fread(buffer, 1, partial_size, file);
 
-    return success;
-}
+        if (read_size != partial_size)
+        {
+            goto error;
+        }
 
-#include <omp.h>
+        chacha_crypt_offset(key, 0, offset, buffer, buffer, partial_size);
 
-#define BLOCK_OFFSET(id, total, size) ((id) * (size) / (total))
-#define BLOCK_SIZE(id, total, size) (BLOCK_OFFSET((id) + 1, (total), (size)) - BLOCK_OFFSET((id), (total), (size)))
+        fseek(file, (long int) offset, SEEK_SET);
+        size_t write_size = fwrite(buffer, 1, partial_size, file);
 
-bool crypt_file_parallel(const char* path, const u8 key[CHACHA_KEY_SIZE])
-{
-    size_t size = filesize(path);
-    u8* fdata = filemap(path, size);
-    bool success = true;
-
-    // Handle file or allocation failure
-    if (fdata == NULL || size == 0)
-    {
-        goto error;
-    }
-
-    // Determine total parallel threads
-
-    printf("Using %d parallel threads...\n", omp_get_max_threads());
-
-    // Distribute file blocks to parallel threads
-    #pragma omp parallel
-    {
-        // Get current thread id
-        const int id = omp_get_thread_num();
-        const int total = omp_get_num_threads();
-
-        // Determine file data block for this thread
-        const size_t block_offset = BLOCK_OFFSET(id, total, size);
-        const size_t block_size = BLOCK_SIZE(id, total, size);
-        u8* const block = fdata + block_offset;
-
-        printf("Thread %d/%d %p %zu %zu\n", id, total, block, block_offset, block_size);
-
-        // Crypt thread local file data block
-        chacha_crypt_offset(key, 0, block_offset, block, block, block_size);
+        if (write_size != read_size)
+        {
+            goto error;
+        }
     }
 
     goto exit;
@@ -253,9 +179,10 @@ error:
     success = false;
 
 exit:
-    if (fdata != NULL)
+    // Close input file
+    if (file != NULL)
     {
-        fileunmap(fdata, size);
+        fclose(file);
     }
 
     return success;
@@ -284,38 +211,24 @@ int main(int argc, char** argv)
         memwipe(password, password_len);
     }
 
-    printf("Crypting '%s' to '%s' using ChaCha cipher...\n", inpath, outpath);
-
-    // Copy input file to output path then crypt in-place
+    // Copy input file to output path
     if (inpath != outpath && strcmp(inpath, outpath) != 0)
     {
+        printf("Copying '%s' to '%s'...", inpath, outpath); fflush(stdout);
         success = copy_file(inpath, outpath);
+        printf(success ? " done.\n" : " failed.\n");
     }
 
-    // Crypt file in parallel if below size threshold
-    if (filesize(outpath) <= FILE_SIZE_THRESHOLD)
+    // Crypt file in parallel using threads
+    if (success)
     {
-        success = success && crypt_file_parallel(outpath, key_buffer);
-    }
-    // Crypt file using normal single threaded I/O
-    else
-    {
-
-        success = success && crypt_file_inplace(outpath, key_buffer);
+        printf("Crypting '%s' using ChaCha cipher...", outpath); fflush(stdout);
+        success = crypt_file_parallel(outpath, key_buffer);
+        printf(success ? " done.\n" : " failed.\n");
     }
 
     // Securely wipe key buffer
     memwipe(key_buffer, sizeof(key_buffer));
-
-    // Print results
-    if (success)
-    {
-        printf("Crypting successful.\n");
-    }
-    else
-    {
-        printf("Crypting failed.\n");
-    }
 
 exit:
     return success ? EXIT_SUCCESS : EXIT_FAILURE;
