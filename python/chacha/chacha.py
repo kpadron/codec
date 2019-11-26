@@ -220,8 +220,8 @@ def chacha_quarter_round(block, a, b, c, d):
 # Generate ChaCha cipher keystream
 def chacha_block(input, stream):
     # Load initial state into output buffer
-    output = array.array('I', [0] * CHACHA_STATE_WORDS)
-    output.extend(input)
+    output = memoryview(array.array('I', [0] * CHACHA_STATE_WORDS))
+    output[:CHACHA_STATE_WORDS] = input[:CHACHA_STATE_WORDS]
 
     # Perform ChaCha rounds
     for _ in range(0, CHACHA_ROUNDS, 2):
@@ -255,22 +255,12 @@ def chacha_increment(counter):
 def add32(x, y):
     return (x + y) & U32_MAX
 
-def add64(x, y):
-    return (x + y) & U64_MAX
-
 def lsh32(value, count):
     return (value << count) & U32_MAX
-
-def lsh64(value, count):
-    return (value << count) & U64_MAX
 
 def rotl32(value, count):
     count &= 31
     return lsh32(value, count) | (value >> (32 - count))
-
-def rotl64(value, count):
-    count &= 63
-    return lsh64(value, count) | (value >> (64 - count))
 
 def load32_le(data):
     return struct.unpack('<I', data[:4])[0]
