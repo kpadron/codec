@@ -21,15 +21,19 @@ CHACHA_CONSTANT = CHACHA_SIGMA if CHACHA_KEY_SIZE >= 32 else CHACHA_TAU
 
 # Return crypted data based on key and nonce
 def crypt(key: bytes, nonce: bytes, data: bytes):
-    try:
-        mv = memoryview(bytearray(data))
+    return ChaCha(key, nonce).crypt(data)
 
-    except TypeError:
-        raise TypeError(f'data must be a bytes-like object.')
+# Return crypted data base on key, nonce, and block counter
+def crypt_block(key: bytes, nonce: int, block: int, data: bytes):
+    ctx = ChaCha(key)
+    ctx.seek_block(nonce, block)
+    return ctx.crypt(data)
 
-    ChaCha(key, nonce).update(mv)
-
-    return mv.tobytes()
+# Return crypted data base on key, nonce, and byte offset
+def crypt_offset(key: bytes, nonce: int, offset: int, data: bytes):
+    ctx = ChaCha(key)
+    ctx.seek_offset(nonce, offset)
+    return ctx.crypt(data)
 
 
 # ChaCha Symmetric Cipher Context
@@ -59,14 +63,8 @@ class ChaCha:
     # Set the internal ChaCha context using a key
     def set_key(self, key: bytes):
         # Validate input
-        try:
-            key = memoryview(key)
-
-            if len(key) < CHACHA_KEY_SIZE:
-                raise TypeError
-
-        except TypeError:
-            raise TypeError(f'key must be a bytes-like object of at least {CHACHA_KEY_SIZE} bytes.')
+        key = verify_type('key', key, verify_bytes)
+        key_size = verify_value('key', len(key), verify_int, CHACHA_KEY_SIZE)
 
         # ChaCha constant
         for i in range(4):
@@ -88,14 +86,8 @@ class ChaCha:
     # Seek the ChaCha keystream using a 128-bit (16-byte) nonce value
     def set_nonce(self, nonce: bytes):
         # Validate input
-        try:
-            nonce = memoryview(nonce)
-
-            if len(nonce) < CHACHA_NONCE_SIZE:
-                raise TypeError
-
-        except TypeError:
-            raise TypeError(f'nonce must be a bytes-like object of at least {CHACHA_NONCE_SIZE} bytes.')
+        nonce = verify_type('nonce', nonce, verify_bytes)
+        nonce_size = verify_value('nonce', len(nonce), verify_int, CHACHA_NONCE_SIZE)
 
         # Load into state words in little-endian byte order
         for i in range(12, 16):
@@ -105,31 +97,45 @@ class ChaCha:
         # Reset keystream window index
         self.index = CHACHA_BLOCK_SIZE
 
+    # Return crypted data
+    def crypt(self, data: bytes):
+        data = verify_type('data', data, verify_bytes)
+
+        if not len(data):
+            return b''
+
+        data = memoryview(bytearray(data))
+
+        self.update(data)
+
+        return bytes(data)
+
     # Seek the ChaCha keystream using a 64-bit (8-byte) nonce and block counter
     def seek_block(self, nonce: int, block: int):
-        if not isinstance(nonce, int) or nonce < 0 or nonce > U64_MAX:
-            raise TypeError(f'nonce must be int in range [0, {U_MAX}].')
+        # Validate nonce input
+        nonce = verify_type('nonce', nonce, verify_int)
+        nonce = verify_value('nonce', nonce, verify_int, 0, U64_MAX)
 
-        if not isinstance(block, int) or block < 0 or block > U64_MAX:
-            raise TypeError(f'block must be int in range [0, {U_MAX}].')
+        # Validate block input
+        block = verify_type('block', block, verify_int)
+        block = verify_value('block', block, verify_int, 0, U64_MAX)
 
         # Load into state words in little-endian byte order
         self.state[12] = block & U32_MAX
-        self.state[13] = block >> 32
+        self.state[13] = (block >> 32) & U32_MAX
         self.state[14] = nonce & U32_MAX
-        self.state[15] = nonce >> 32
+        self.state[15] = (nonce >> 32) & U32_MAX
 
         # Reset keystream window index
         self.index = CHACHA_BLOCK_SIZE
 
     # Seek the ChaCha keystream using a 64-bit (8-byte) nonce and offset counter
-    def seek_offset(self, nonce, offset):
-        if not isinstance(nonce, int) or nonce < 0 or nonce > U64_MAX:
-            raise TypeError(f'nonce must be int in range [0, {U_MAX}].')
+    def seek_offset(self, nonce: int, offset: int):
+        # Validate offset input
+        offset = verify_type('offset', offset, verify_int)
+        offset = verify_value('offset', offset, verify_int, 0, U64_MAX)
 
-        if not isinstance(offset, int) or offset < 0 or offset > U64_MAX:
-            raise TypeError(f'offset must be int in range [0, {U_MAX}].')
-
+        # Determine keystream block and index
         block = offset // CHACHA_BLOCK_SIZE
         index = offset % CHACHA_BLOCK_SIZE
 
@@ -144,18 +150,11 @@ class ChaCha:
 
     # Crypt data using ChaCha cipher
     def update(self, data: bytearray):
-        # Validate input
-        try:
-            data = memoryview(data)
-
-            if data.readonly:
-                raise TypeError
-
-        except TypeError:
-            raise TypeError(f'data must be a mutable bytes-like object.')
+        # Validate input data
+        data = verify_type('data', data, verify_bytes_mutable)
+        data_size = len(data)
 
         offset = 0
-        data_size = len(data)
         stream_size = CHACHA_BLOCK_SIZE - self.index
 
         # Crypt data using any available keystream bytes
@@ -164,7 +163,7 @@ class ChaCha:
             min_size = min(data_size, stream_size)
 
             # Xor data with keystream bytes
-            memxor(data, self.stream, min_size)
+            memxor(data, self.stream[self.index:self.index+min_size], min_size)
 
             # Update stream index, offset, and size
             self.index += min_size
@@ -191,7 +190,7 @@ class ChaCha:
             chacha_increment(self.state[12:12+CHACHA_COUNTER_WORDS])
 
             # Xor input with keystream bytes
-            memxor(data[offset:offset+data_size], self.stream, data_size)
+            memxor(data[offset:offset+data_size], self.stream[:data_size], data_size)
 
             # Update stream index
             self.index = data_size
@@ -221,7 +220,7 @@ def chacha_quarter_round(block, a, b, c, d):
 def chacha_block(input, stream):
     # Load initial state into output buffer
     output = memoryview(array.array('I', [0] * CHACHA_STATE_WORDS))
-    output[:CHACHA_STATE_WORDS] = input[:CHACHA_STATE_WORDS]
+    output[:] = input[:CHACHA_STATE_WORDS]
 
     # Perform ChaCha rounds
     for _ in range(0, CHACHA_ROUNDS, 2):
@@ -251,6 +250,47 @@ def chacha_increment(counter):
 
 
 # Utility functions
+
+def verify_type(name, var, ver_func, *args, **kwargs):
+    try:
+        var = ver_func(var, *args, **kwargs)
+    except TypeError as exc:
+        raise TypeError(f'"{name}" {exc}')
+    return var
+
+def verify_value(name, var, ver_func, *args, **kwargs):
+    try:
+        var = ver_func(var, *args, **kwargs)
+    except ValueError as exc:
+        raise ValueError(f'"{name}" {exc}')
+    return var
+
+def verify_bytes(var):
+    try:
+        var = memoryview(var)
+    except:
+        raise TypeError('must be bytes-like object')
+
+    return var
+
+def verify_bytes_mutable(var):
+    var = verify_bytes(var)
+
+    if var.readonly:
+        raise TypeError('must be mutable')
+
+    return var
+
+def verify_int(var, lower=None, upper=None):
+    var = int(var)
+
+    if lower is not None and var < lower:
+        raise ValueError(f'must be larger than {lower}: {var}')
+
+    if upper is not None and var > upper:
+        raise ValueError(f'must be smaller than {upper}: {var}')
+
+    return var
 
 def add32(x, y):
     return (x + y) & U32_MAX
