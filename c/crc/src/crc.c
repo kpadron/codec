@@ -7,7 +7,7 @@
 #define CRC_BUFFER_SIZE 65536
 
 // CRC-32 Table
-const uint32_t CRC32_TABLE[256] =
+const u32 CRC32_TABLE[256] =
 {
     0x00000000, 0x77073096, 0xEE0E612C, 0x990951BA,
     0x076DC419, 0x706AF48F, 0xE963A535, 0x9E6495A3,
@@ -76,7 +76,7 @@ const uint32_t CRC32_TABLE[256] =
 };
 
 // CRC-32C (Castagnoli) Table
-const uint32_t CRC32C_TABLE[256] =
+const u32 CRC32C_TABLE[256] =
 {
     0x00000000, 0xF26B8303, 0xE13B70F7, 0x1350F3F4,
     0xC79A971F, 0x35F1141C, 0x26A1E7E8, 0xD4CA64EB,
@@ -144,13 +144,13 @@ const uint32_t CRC32C_TABLE[256] =
     0xBE2DA0A5, 0x4C4623A6, 0x5F16D052, 0xAD7D5351,
 };
 
-static uint32_t internal_crc(
+static u32 internal_crc(
     const void * const restrict data,
     size_t size,
-    uint32_t crc,
-    const uint32_t table[static const restrict 256])
+    u32 crc,
+    const u32 table[static const restrict 256])
 {
-    const uint8_t * restrict p = (const uint8_t *) data;
+    const u8 * restrict p = (const u8 *) data;
     crc = ~crc;
 
     // Process 4-byte blocks
@@ -174,13 +174,13 @@ static uint32_t internal_crc(
     return ~crc;
 }
 
-static uint32_t internal_crc_filepath(
+static u32 internal_crc_filepath(
     const char * const restrict path,
-    const uint32_t table[static const restrict 256])
+    const u32 table[static const restrict 256])
 {
     FILE * const restrict f = fopen(path, "rb");
-    uint8_t * const restrict buffer = (uint8_t *) malloc(CRC_BUFFER_SIZE);
-    uint32_t crc = 0;
+    u8 * const restrict buffer = (u8 *) malloc(CRC_BUFFER_SIZE);
+    u32 crc = 0;
 
     // Check for errors
     if (f == NULL || buffer == NULL)
@@ -234,22 +234,22 @@ exit:
     return crc;
 }
 
-uint32_t crc32(const void * const restrict data, size_t size)
+u32 crc32(const void * const restrict data, size_t size)
 {
     return internal_crc(data, size, 0, CRC32_TABLE);
 }
 
-uint32_t crc32c(const void * const restrict data, size_t size)
+u32 crc32c(const void * const restrict data, size_t size)
 {
     return internal_crc(data, size, 0, CRC32C_TABLE);
 }
 
-uint32_t crc32_filepath(const char * const restrict path)
+u32 crc32_filepath(const char * const restrict path)
 {
     return internal_crc_filepath(path, CRC32_TABLE);
 }
 
-uint32_t crc32c_filepath(const char * const restrict path)
+u32 crc32c_filepath(const char * const restrict path)
 {
     return internal_crc_filepath(path, CRC32C_TABLE);
 }
