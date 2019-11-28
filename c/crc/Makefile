@@ -1,28 +1,38 @@
-CC = clang
-AR = ar
+CC = gcc
+AR = gcc-ar
+NM = gcc-nm
+RANLIB = gcc-ranlib
 RM = rm -rf
 
 INCDIR = inc
 SRCDIR = src
 OBJDIR = .obj
+LIBDIR = lib
 
 LIBSRC = crc.c
+DLLSRC = entry.c
 EXESRC = main.c
 
 LIBOBJ = $(LIBSRC:%.c=$(OBJDIR)/%.o)
+DLLOBJ = $(DLLSRC:%.c=$(OBJDIR)/%.o)
 EXEOBJ = $(EXESRC:%.c=$(OBJDIR)/%.o)
-OBJ = $(LIBOBJ) $(EXEOBJ)
+OBJ = $(LIBOBJ) $(DLLOBJ) $(EXEOBJ)
 
-TARGET = crc libcrc.so #libcrc.a
+LIB = $(LIBDIR)/libcrc.a
+DLL = $(LIBDIR)/libcrc.so
+TARGET = crc.exe
+
+INC = -I $(INCDIR) -I ../inc/
 
 vpath %.h $(INCDIR)
 vpath %.c $(SRCDIR)
 
-CPPFLAGS = -I $(INCDIR) -I ../shared/inc/
+CPPFLAGS = $(INC)
 CFLAGS = -std=c99 -Wall -Wextra
-CCFLAGS = -fPIC -flto
-LDFLAGS = -fPIC -flto -Wl,-L../shared/,-lshared, -Wl,-rpath,../shared/
-ARFLAGS = rcs
+CCFLAGS = -march=native -fopenmp -fPIC -flto=auto -fuse-linker-plugin -ffat-lto-objects
+LDFLAGS = -L $(LIBDIR) -Wl,-z,relro,-z,now
+LDLIBS = $(LIB)
+ARFLAGS = -rUcus
 DEPFLAGS = -MMD -MP -MT $@ -MF $(OBJDIR)/$*.d
 
 DEPS = $(OBJ:%.o=%.d)
@@ -30,39 +40,35 @@ DEPS = $(OBJ:%.o=%.d)
 default: release
 
 clean:
-	$(RM) $(OBJDIR) $(TARGET)
+	$(RM) $(OBJDIR) $(LIBDIR) $(TARGET)
 
-clean_shared:
-	$(MAKE) -C ../shared/ clean
+release: CPPFLAGS += -DRELEASE -DNDEBUG
+release: CCFLAGS += -O3
+release: $(TARGET)
 
-release: CPPFLAGS += -DNDEBUG
-release: CCFLAGS += -O2
-release: LDFLAGS += -O2 -s -Wl,-O2,-s
-release: release_shared $(TARGET)
-
-release_shared:
-	$(MAKE) -C ../shared/ release
-
+debug: CPPFLAGS += -DDEBUG
 debug: CCFLAGS += -g -ggdb3 -Og
-debug: debug_shared $(TARGET)
+debug: $(TARGET)
 
-debug_shared:
-	$(MAKE) -C ../shared/ debug
+%.exe: $(EXEOBJ) $(LIB)
+	$(CC) $(CCFLAGS) $(LDFLAGS) -pie $(EXEOBJ) $(LDLIBS) -o $@
 
-%.a: $(LIBOBJ)
+$(LIBDIR)/%.so: $(DLLOBJ) $(LIB) | $(LIBDIR)
+	$(CC) $(CCFLAGS) $(LDFLAGS) -shared $(DLLOBJ) $(LDLIBS) -o $@
+
+$(LIBDIR)/%.a: $(LIBOBJ) | $(LIBDIR)
 	$(AR) $(ARFLAGS) $@ $^
 
-%.so: $(LIBOBJ)
-	$(CC) $(LDFLAGS) -shared $^ -o $@
-
-crc: $(LIBOBJ) $(EXEOBJ)
-	$(CC) $(LDFLAGS) -pie $^ -o $@
-
-$(OBJDIR)/%.o: %.c | $(OBJDIR)
+$(OBJDIR)/%.o: $(SRCDIR)/%.c | $(OBJDIR)
 	$(CC) $(DEPFLAGS) $(CPPFLAGS) $(CFLAGS) $(CCFLAGS) -c $< -o $@
+
+$(LIBDIR):
+	@mkdir -p $@
 
 $(OBJDIR):
 	@mkdir -p $@
 
 $(DEPS):
 -include $(wildcard $(DEPS))
+
+.PRECIOUS: $(OBJDIR)/%.o $(LIBDIR)/%.a $(LIBDIR)/%.so

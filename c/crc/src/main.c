@@ -1,15 +1,38 @@
-#include <arpa/inet.h>
+#include <stdio.h>
+#include <stdbool.h>
 
 #include "crc.h"
-#include "hash.h"
 
-static buffer_t hash_wrapper(const char* path)
+static bool crc_file(const char * const restrict path, u32 * const restrict crc)
 {
-    const uint32_t crc = htonl(crc32_filepath(path));
-    return buffer_copy(&crc, sizeof(crc));
+    *crc = crc32_filepath(path);
+
+    if (!*crc)
+    {
+        return false;
+    }
+
+    return true;
 }
 
 int main(int argc, char** argv)
 {
-    return hash_main(argc, argv, "CRC-32", hash_wrapper);
+    u32 crc = 0;
+    bool success = true;
+
+    if (argc < 2)
+    {
+        printf("Usage: %s input_file\n", argv[0]);
+        goto exit;
+    }
+
+    const char* inpath = argv[1];
+
+    // CRC file
+    printf("Hashing '%s' using CRC-32 hash...", inpath); fflush(stdout);
+    success = crc_file(inpath, &crc);
+    printf(success ? " done. %u\n" : " failed. %u\n", crc);
+
+exit:
+    return success ? EXIT_SUCCESS : EXIT_FAILURE;
 }
