@@ -1,8 +1,10 @@
 #include <stdio.h>
+#include <errno.h>
 
 #include "crc.h"
 
-#define CRC_BLOCK_SIZE ((size_t) 1 << 20) // 1 MiB
+// Buffer size to use for file I/O
+#define CRC_BUFFER_SIZE 65536
 
 // CRC-32 Table
 const uint32_t CRC32_TABLE[256] =
@@ -142,11 +144,16 @@ const uint32_t CRC32C_TABLE[256] =
     0xBE2DA0A5, 0x4C4623A6, 0x5F16D052, 0xAD7D5351,
 };
 
-static uint32_t internal_crc(const void* data, size_t size, uint32_t crc, const uint32_t table[static const restrict 256])
+static uint32_t internal_crc(
+    const void * const restrict data,
+    size_t size,
+    uint32_t crc,
+    const uint32_t table[static const restrict 256])
 {
-    const uint8_t* p = (const uint8_t*) data;
+    const uint8_t * restrict p = (const uint8_t *) data;
     crc = ~crc;
 
+    // Process 4-byte blocks
     while (size >= 4)
     {
         crc = (crc >> 8) ^ table[(crc ^ p[0]) & 0xFF];
@@ -158,6 +165,7 @@ static uint32_t internal_crc(const void* data, size_t size, uint32_t crc, const 
         size -= 4;
     }
 
+    // Process last partial block
     while (size--)
     {
         crc = (crc >> 8) ^ table[(crc ^ *p++) & 0xFF];
@@ -166,64 +174,82 @@ static uint32_t internal_crc(const void* data, size_t size, uint32_t crc, const 
     return ~crc;
 }
 
-static uint32_t internal_crc_filepath(const char* path, const uint32_t table[static const restrict 256])
+static uint32_t internal_crc_filepath(
+    const char * const restrict path,
+    const uint32_t table[static const restrict 256])
 {
-    FILE* f = NULL;
-    buffer_t buffer = UTIL_EMPTY_BUFFER;
+    FILE * const restrict f = fopen(path, "rb");
+    uint8_t * const restrict buffer = (uint8_t *) malloc(CRC_BUFFER_SIZE);
     uint32_t crc = 0;
 
-    f = fopen(path, "rb");
-
-    if (f == NULL) goto error;
-
-    buffer = buffer_alloc(CRC_BLOCK_SIZE);
-
-    if (!buffer.data) goto error;
-
-    setbuf(f, NULL);
-
-    for (;;)
+    // Check for errors
+    if (f == NULL || buffer == NULL)
     {
-        const size_t read_size = fread(buffer.data, 1, buffer.size, f);
-
-        crc = internal_crc(buffer.data, read_size, crc, table);
-
-        if (read_size != buffer.size) break;
+        goto error;
     }
 
+    // Disable I/O buffering
+    setbuf(f, NULL);
+
+    // CRC file blocks
+    for (;;)
+    {
+        // Read file data into buffer
+        const size_t read_size = fread(buffer, 1, CRC_BUFFER_SIZE, f);
+
+        // Calculate CRC of buffer contents
+        crc = internal_crc(buffer, read_size, crc, table);
+
+        // Check for EOF or errors
+        if (read_size != CRC_BUFFER_SIZE)
+        {
+            if (ferror(f))
+            {
+                goto error;
+            }
+            else
+            {
+                break;
+            }
+        }
+    }
+
+    goto exit;
+
 error:
-    if (f != NULL) fclose(f);
-    if (buffer.data != NULL) buffer_dealloc(&buffer);
+    fprintf(stderr, "[crc] Failed to CRC file contents of '%s': %s",
+        path, strerror(errno));
+
+exit:
+    if (f != NULL)
+    {
+        fclose(f);
+    }
+
+    if (buffer != NULL)
+    {
+        free(buffer);
+    }
 
     return crc;
 }
 
-uint32_t crc32(const void* data, size_t size)
+uint32_t crc32(const void * const restrict data, size_t size)
 {
     return internal_crc(data, size, 0, CRC32_TABLE);
 }
 
-uint32_t crc32c(const void* data, size_t size)
+uint32_t crc32c(const void * const restrict data, size_t size)
 {
     return internal_crc(data, size, 0, CRC32C_TABLE);
 }
 
-uint32_t crc32_buffer(const buffer_t buffer)
-{
-    return crc32(buffer.data, buffer.size);
-}
-
-uint32_t crc32c_buffer(const buffer_t buffer)
-{
-    return crc32c(buffer.data, buffer.size);
-}
-
-uint32_t crc32_filepath(const char* path)
+uint32_t crc32_filepath(const char * const restrict path)
 {
     return internal_crc_filepath(path, CRC32_TABLE);
 }
 
-uint32_t crc32c_filepath(const char* path)
+uint32_t crc32c_filepath(const char * const restrict path)
 {
     return internal_crc_filepath(path, CRC32C_TABLE);
 }
