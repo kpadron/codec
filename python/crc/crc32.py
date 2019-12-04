@@ -1,94 +1,96 @@
 #!/usr/bin/env python3
-import os
-import sys
+CRC32_POLYNOMIAL = 0xEDB88320
+CRC32C_POLYNOMIAL = 0x82F63B78
 
-sys.path.append('../shared')
-import utility as util
-
-# Hash 1 MiB blocks from the file at a time
-BLOCK_SIZE = (1 << 20)
-
-def _crc_8(data: int, polynomial: int) -> int:
-    """Manually calculates the 32-bit CRC value for the provided 8-bit input
-    using the given reversed form CRC polynomial.
+class CrcTable:
+    """CRC lookup table that utilizes memoization.
     """
-    polynomial &= 0xFFFFFFFF
-    crc = data & 0xFF
 
-    for _ in range(8):
-        if not (crc & 1): crc = (crc >> 1) & 0x7FFFFFFF
-        else: crc = ((crc >> 1) & 0x7FFFFFFF) ^ polynomial
+    def __init__(self, polynomial: int = CRC32_POLYNOMIAL):
+        """Initialize a CrcTable instance with the specified CRC polynomial.
+        """
+        self.polynomial = polynomial
+        self.table = {}
 
-    return crc
+    def __getitem__(self, index: int) -> int:
+        """Return the CRC value for the specified index.
+        """
+        value = self.table.get(index)
 
+        if value is None:
+            value = _crc8(index, self.polynomial)
+            self.table[index] = value
 
-def _crc_32(data: bytes, crc: int, table: list) -> int:
-    """Calculates the 32-bit CRC value for the provided input bytes.
-
-    This computes the CRC values using the provided reversed form CRC table.
-    """
-    crc = (crc ^ 0xFFFFFFFF) & 0xFFFFFFFF
-
-    for b in data:
-        index = (crc ^ b) & 0xFF
-        crc = (crc >> 8) & 0xFFFFFF
-        crc ^= table[index]
-
-    return (crc ^ 0xFFFFFFFF) & 0xFFFFFFFF
-
-
-def generate_crc32_table(polynomial: int) -> list:
-    """Generate a lookup table containing the 32-bit CRC values of all 8-bit inputs
-    using the given reversed form CRC polynomial.
-    """
-    return [_crc_8(b, polynomial) for b in range(256)]
-
-
-def crc32(data: bytes, crc: int = 0) -> int:
-    """Calculate the CRC-32 value for the provided input bytes.
-    """
-    return _crc_32(data, crc, crc32_table)
-
-
-def crc32c(data: bytes, crc: int = 0) -> int:
-    """Calculate the CRC-32C (Castagnoli) value for the provided input bytes.
-    """
-    return _crc_32(data, crc, crc32c_table)
-
-
-def crc_file(inpath):
-    """Calculate the CRC value for the provided input file.
-    """
-    crc = 0
-
-    with open(inpath, 'rb') as infile:
-        buffer = bytearray(BLOCK_SIZE)
-
-        while True:
-            read_size = infile.readinto(buffer)
-
-            with memoryview(buffer)[:read_size] as view:
-                crc = crc32(view, crc)
-
-            if read_size != len(buffer):
-                break
-
-    return crc
+        return value
 
 
 # CRC-32 Table
 # Uses CRC polynomial 0x04C11DB7 (or 0xEDB88320 in reversed form)
 # This is used in Ethernet, SATA, and other protocols, formats, and systems.
-crc32_table = generate_crc32_table(0xEDB88320)
-
+CRC32_TABLE = CrcTable(CRC32_POLYNOMIAL)
 
 # CRC-32C (Castagnoli) Table
 # Uses CRC polynomial 0x1EDC6F41 (or 0x82F63B78 in reversed form)
 # This is used in SCTP, ext4, Btrfs, and other protocols, formats, and systems.
-crc32c_table = generate_crc32_table(0x82F63B78)
+CRC32C_TABLE = CrcTable(CRC32C_POLYNOMIAL)
 
 
-if __name__ == '__main__':
-    import hash
+def crc32(data: bytes, crc: int = 0) -> int:
+    """Calculate the CRC-32 value for the provided input bytes.
+    """
+    return _crc32(data, crc, CRC32_TABLE)
 
-    sys.exit(hash.hash_main('CRC-32', crc_file))
+def crc32c(data: bytes, crc: int = 0) -> int:
+    """Calculate the CRC-32C (Castagnoli) value for the provided input bytes.
+    """
+    return _crc32(data, crc, CRC32C_TABLE)
+
+
+BUFFER_SIZE = 65536
+
+def crc_file(file_path: str) -> int:
+    """Calculate the CRC value for the provided input file.
+    """
+    with open(file_path, 'rb') as f:
+        buffer = memoryview(bytearray(BUFFER_SIZE))
+        crc = 0
+
+        while True:
+            read_size = f.readinto(buffer)
+
+            crc = crc32(buffer[:read_size], crc)
+
+            if read_size != BUFFER_SIZE:
+                break
+
+    return crc
+
+
+def _crc8(byte, polynomial):
+    """Manually calculates the 32-bit CRC value for the provided 8-bit input
+    using the given reversed form CRC polynomial.
+    """
+    polynomial &= 0xFFFFFFFF
+    crc = byte & 0xFF
+
+    for bit in range(8):
+        xor = crc & 1
+        crc = (crc >> 1) & 0x7FFFFFFF
+
+        if xor:
+            crc ^= polynomial
+
+    return crc
+
+def _crc32(data, crc, table):
+    """Calculates the 32-bit CRC value for the provided input bytes.
+
+    This computes the CRC values using the provided reversed form CRC table.
+    """
+    crc = ~crc & 0xFFFFFFFF
+
+    for byte in data:
+        index = (crc ^ byte) & 0xFF
+        crc = (crc >> 8) ^ table[index]
+
+    return ~crc & 0xFFFFFFFF
